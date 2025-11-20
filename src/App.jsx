@@ -1,600 +1,603 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  initializeApp 
-} from 'firebase/app';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged,
-  signInWithCustomToken
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  doc, 
-  setDoc, 
-  onSnapshot, 
-  updateDoc, 
-  increment, 
-  arrayUnion
-} from 'firebase/firestore';
-import { 
-  Coffee, 
-  Star, 
-  QrCode, 
-  History, 
-  Gift, 
-  Sparkles,
-  Scan,
-  Store,
-  User,
-  CheckCircle,
-  Scissors,
-  Utensils,
-  Car,
-  Settings
-} from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { QrCode, LogIn, Star, Coffee, User, Lock, Send } from 'lucide-react';
 
-// --- Firebase Configuration ---
-// Configuración local de emergencia (REEMPLAZAR EN PRODUCCIÓN)
-const localFirebaseConfig = {
-  apiKey: "TU_API_KEY_AQUI", 
-  authDomain: "tu-proyecto.firebaseapp.com", 
-  projectId: "tu-proyecto", 
-  storageBucket: "tu-proyecto.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:123456789:web:abcdef"
+// --- CONFIGURACIÓN GLOBAL (NO TOCAR) ---
+// Variables globales proporcionadas por el entorno (Canvas)
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Inicialización de Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+// ----------------------------------------
+
+// --- CONFIGURACIÓN DE SEGURIDAD Y NEGOCIOS ---
+// PIN de Administración global (¡CAMBIAR POR UN MÉTODO MÁS SEGURO EN PRODUCCIÓN!)
+const ADMIN_PIN_CODE = '1234';
+
+// Configuración de Múltiples Negocios (PERSONALIZAR ESTO)
+const BUSINESS_CONFIG = {
+    'coffee-star': {
+        name: 'Coffee Star',
+        theme: 'text-yellow-600 bg-yellow-50',
+        primaryColor: 'bg-yellow-600 hover:bg-yellow-700',
+        icon: <Coffee size={28} />,
+        levels: [
+            { stars: 20, name: 'Oro', color: 'text-yellow-500', reward: '¡Café GRANDE gratis cada semana!' },
+            { stars: 10, name: 'Plata', color: 'text-gray-400', reward: '20% de descuento en todos los pasteles.' },
+            { stars: 5, name: 'Bronce', color: 'text-amber-700', reward: 'Bebida pequeña de cortesía en tu próximo cumpleaños.' },
+        ]
+    },
+    'barber-vip': { // Ejemplo de un segundo negocio (Peluquería VIP)
+        name: 'Barber VIP Style',
+        theme: 'text-blue-700 bg-blue-50',
+        primaryColor: 'bg-blue-700 hover:bg-blue-800',
+        icon: <Send size={28} className='transform -scale-x-100' />, // Usamos Send como tijeras de ejemplo
+        levels: [
+            { stars: 8, name: 'Diamante', color: 'text-cyan-400', reward: 'Corte de pelo gratis y un afeitado de lujo.' },
+            { stars: 4, name: 'Oro', color: 'text-yellow-500', reward: '50% de descuento en tratamientos de barba.' },
+        ]
+    }
 };
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : localFirebaseConfig;
+// --- UTILIDADES ---
 
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-// FIX 1: Crear un ID de aplicación seguro para Firestore reemplazando '/' con '-'.
-// Esto resuelve el error "Invalid document reference" al garantizar un conteo de segmentos par.
-const safeAppId = rawAppId.replace(/\//g, '-');
-
-
-// ** FIX: Inicialización Estática de Firebase fuera del Componente **
-// Esto previene errores de ciclo de vida/módulo que causan 'reading default'
-const firebaseApp = initializeApp(firebaseConfig);
-const auth = getAuth(firebaseApp);
-const db = getFirestore(firebaseApp);
-
-
-// --- CONFIGURACIÓN DE TEMAS (NICHOS) ---
-const THEMES = {
-  cafe: {
-    id: 'cafe',
-    name: 'Cafetería',
-    appName: 'Coffee Star',
-    currency: 'Estrellas',
-    colors: {
-      primary: 'bg-emerald-600',
-      primaryHover: 'hover:bg-emerald-700',
-      text: 'text-emerald-600',
-      textDark: 'text-emerald-800',
-      bgLight: 'bg-emerald-50',
-      border: 'border-emerald-100',
-      badge: 'bg-emerald-100 text-emerald-700'
-    },
-    icon: <Coffee />,
-    rewards: [
-      { id: 1, name: 'Extra Shot', cost: 25, desc: 'Potenciador' },
-      { id: 2, name: 'Panqué', cost: 50, desc: 'Repostería' },
-      { id: 3, name: 'Bebida Gratis', cost: 100, desc: 'Cualquier tamaño' },
-    ]
-  },
-  barber: {
-    id: 'barber',
-    name: 'Barbería',
-    appName: 'Gentleman Cut',
-    currency: 'Sellos',
-    colors: {
-      primary: 'bg-slate-900',
-      primaryHover: 'hover:bg-slate-800',
-      text: 'text-slate-900',
-      textDark: 'text-slate-950',
-      bgLight: 'bg-slate-100',
-      border: 'border-slate-200',
-      badge: 'bg-slate-200 text-slate-800'
-    },
-    icon: <Scissors />,
-    rewards: [
-      { id: 1, name: 'Cera Gratis', cost: 30, desc: 'Peinado' },
-      { id: 2, name: 'Descuento 50%', cost: 60, desc: 'En corte' },
-      { id: 3, name: 'Corte Gratis', cost: 100, desc: 'Servicio completo' },
-    ]
-  },
-  restaurant: {
-    id: 'restaurant',
-    name: 'Restaurante',
-    appName: 'Tasty Bites',
-    currency: 'Puntos',
-    colors: {
-      primary: 'bg-orange-500',
-      primaryHover: 'hover:bg-orange-600',
-      text: 'text-orange-500',
-      textDark: 'text-orange-800',
-      bgLight: 'bg-orange-50',
-      border: 'border-orange-100',
-      badge: 'bg-orange-100 text-orange-700'
-    },
-    icon: <Utensils />,
-    rewards: [
-      { id: 1, name: 'Bebida Gratis', cost: 40, desc: 'Refresco/Agua' },
-      { id: 2, name: 'Postre', cost: 80, desc: 'Cualquiera del menú' },
-      { id: 3, name: 'Plato Fuerte', cost: 200, desc: 'Hasta $150' },
-    ]
-  },
-  carwash: {
-    id: 'carwash',
-    name: 'Autolavado',
-    appName: 'Speedy Wash',
-    currency: 'Gotas',
-    colors: {
-      primary: 'bg-blue-600',
-      primaryHover: 'hover:bg-blue-700',
-      text: 'text-blue-600',
-      textDark: 'text-blue-800',
-      bgLight: 'bg-blue-50',
-      border: 'border-blue-100',
-      badge: 'bg-blue-100 text-blue-700'
-    },
-    icon: <Car />,
-    rewards: [
-      { id: 1, name: 'Cera Líquida', cost: 50, desc: 'Aplicación' },
-      { id: 2, name: 'Aromatizante', cost: 80, desc: 'Pino/Vainilla' },
-      { id: 3, name: 'Lavado Gratis', cost: 150, desc: 'Paquete Básico' },
-    ]
-  }
-};
-
-// --- Componente Principal ---
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [userData, setUserData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  
-  // Estado global de la App
-  const [activeTab, setActiveTab] = useState('home');
-  const [isBaristaMode, setIsBaristaMode] = useState(false);
-  const [currentTheme, setCurrentTheme] = useState(THEMES.cafe); 
-  const [showThemeSelector, setShowThemeSelector] = useState(false); 
-
-  // 1. Autenticación
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        // Usa el token de Canvas si está disponible, sino, inicia sesión anónima
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
+/**
+ * Determina el nivel y la recompensa del usuario.
+ * @param {number} stars - El número actual de puntos/estrellas del usuario.
+ * @param {Array} configLevels - La configuración de niveles del negocio.
+ * @returns {{name: string, color: string, reward: string}}
+ */
+const getLevelInfo = (stars, configLevels) => {
+    // Buscar el nivel más alto que el usuario ha alcanzado
+    const sortedLevels = [...configLevels].sort((a, b) => b.stars - a.stars);
+    
+    for (const level of sortedLevels) {
+        if (stars >= level.stars) {
+            return {
+                name: level.name,
+                color: level.color,
+                reward: level.reward,
+                nextStars: 0 // No hay más niveles
+            };
         }
-      } catch (error) {
-        console.error("Auth error:", error);
-      }
+    }
+    
+    // Si no tiene el primer nivel, buscamos cuántas faltan para el primero
+    const firstLevelStars = configLevels.length > 0 ? configLevels[configLevels.length - 1].stars : 5;
+    const remaining = firstLevelStars - stars;
+
+    return {
+        name: 'Novato',
+        color: 'text-gray-500',
+        reward: 'Sube de nivel para desbloquear grandes recompensas.',
+        nextStars: remaining > 0 ? remaining : 0
     };
-    initAuth();
+};
 
-    // ** FIX: Se removió 'auth' de la dependencia ya que es una constante externa.
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      if (!currentUser) setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []); 
+/**
+ * Componente para mostrar mensajes de error/éxito
+ */
+const Alert = ({ message, type }) => {
+    const baseClasses = "p-4 mb-4 text-sm rounded-lg";
+    let typeClasses = "";
 
-  // 2. Datos del Usuario
-  useEffect(() => {
-    if (!user) return;
+    if (type === 'error') {
+        typeClasses = "bg-red-100 text-red-700";
+    } else if (type === 'success') {
+        typeClasses = "bg-green-100 text-green-700";
+    } else {
+        typeClasses = "bg-blue-100 text-blue-700";
+    }
+
+    return (
+        <div className={`${baseClasses} ${typeClasses}`} role="alert">
+            {message}
+        </div>
+    );
+};
+
+// -----------------------------------------------------
+// VISTAS PRINCIPALES (Cliente, Admin)
+// -----------------------------------------------------
+
+/**
+ * Vista de la Tarjeta de Lealtad del Cliente
+ */
+const CustomerView = ({ userId, userData, businessId, businessConfig, updateStars }) => {
+    const [currentTab, setCurrentTab] = useState('card'); // 'card', 'rewards', 'scan'
+    const currentStars = userData.stars || 0;
+    const levelInfo = getLevelInfo(currentStars, businessConfig.levels);
+    const { name, color, reward, nextStars } = levelInfo;
+
+    // Calculamos el progreso para la barra (para el siguiente nivel)
+    const sortedLevels = [...businessConfig.levels].sort((a, b) => a.stars - b.stars);
+    const nextLevel = sortedLevels.find(l => l.stars > currentStars);
     
-    // Ruta de Firestore: /artifacts/{safeAppId}/users/{userId}/loyalty_data/profile
-    // Usamos safeAppId para garantizar un conteo de segmentos par.
-    const userRef = doc(db, 'artifacts', safeAppId, 'users', user.uid, 'loyalty_data', 'profile');
+    let progress = 0;
+    let target = 0;
     
-    const unsubscribe = onSnapshot(userRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setUserData(docSnap.data());
-      } else {
-        // Crear perfil default si no existe
-        const shortId = Math.floor(100000 + Math.random() * 900000).toString();
-        setDoc(userRef, {
-          name: 'Cliente Nuevo',
-          points: 50,
-          level: 'Bronce',
-          memberId: shortId, 
-          joinedDate: new Date().toISOString(),
-          transactions: [{ id: 1, title: 'Regalo de Bienvenida', points: 50, type: 'earn', date: new Date().toISOString() }]
+    if (nextLevel) {
+        const previousLevel = sortedLevels.slice().reverse().find(l => l.stars <= currentStars) || { stars: 0 };
+        target = nextLevel.stars;
+        const progressRange = target - previousLevel.stars;
+        const currentProgress = currentStars - previousLevel.stars;
+        progress = progressRange > 0 ? (currentProgress / progressRange) * 100 : 100;
+    } else {
+        progress = 100; // Nivel máximo alcanzado
+    }
+
+    // Generar el contenido del QR (ejemplo simple: businessId/userId)
+    const qrData = `${businessId}/${userId}`;
+    const qrImageURL = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrData)}`;
+
+    return (
+        <div className="flex flex-col min-h-screen p-4 pb-20 bg-gray-50">
+            {/* Encabezado */}
+            <div className={`p-4 rounded-lg shadow-md mb-6 ${businessConfig.primaryColor} text-white`}>
+                <div className="flex items-center space-x-3">
+                    {businessConfig.icon}
+                    <h1 className="text-2xl font-extrabold">{businessConfig.name}</h1>
+                </div>
+                <p className="mt-1 text-sm opacity-90">Tu tarjeta de lealtad digital.</p>
+            </div>
+
+            {/* Contenido Principal */}
+            <div className="flex-grow">
+                {currentTab === 'card' && (
+                    <div className="p-6 bg-white rounded-xl shadow-2xl">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-semibold text-gray-700 flex items-center">
+                                <User className="w-5 h-5 mr-2" /> Mi Cuenta
+                            </h2>
+                            <span className={`px-3 py-1 text-sm font-bold rounded-full ${color} bg-opacity-20`}>
+                                {name}
+                            </span>
+                        </div>
+
+                        {/* Contenedor de Estrellas */}
+                        <div className="flex flex-col items-center justify-center p-6 mb-4 rounded-lg bg-gray-50 border border-gray-200">
+                            <Star className={`w-12 h-12 mb-2 ${color} fill-current`} />
+                            <p className="text-4xl font-extrabold text-gray-800">{currentStars}</p>
+                            <p className="text-sm font-medium text-gray-500">
+                                {businessConfig.levels.length > 0 ? businessConfig.icon.type.name : 'Puntos'} Acumulados
+                            </p>
+                        </div>
+
+                        {/* Barra de Progreso */}
+                        {nextLevel && (
+                            <div className="mt-4">
+                                <p className="text-sm font-medium text-gray-600 mb-1">
+                                    Faltan {nextStars} {businessConfig.icon.type.name} para Nivel {nextLevel.name}
+                                </p>
+                                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                    <div 
+                                        className={`h-2.5 rounded-full ${businessConfig.primaryColor.split(' ')[0]}`} 
+                                        style={{ width: `${progress}%` }}
+                                    ></div>
+                                </div>
+                            </div>
+                        )}
+                        
+                    </div>
+                )}
+
+                {currentTab === 'rewards' && (
+                    <div className="p-6 bg-white rounded-xl shadow-2xl">
+                        <h2 className="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                            <Star className="w-6 h-6 mr-2 text-yellow-500" /> Mis Recompensas
+                        </h2>
+                        <div className="space-y-4">
+                            {businessConfig.levels.map((level, index) => (
+                                <div 
+                                    key={index}
+                                    className={`p-4 rounded-lg border-l-4 ${currentStars >= level.stars ? 'border-green-500 bg-green-50' : 'border-gray-300 bg-gray-100'}`}
+                                >
+                                    <p className="font-bold text-lg text-gray-800">{level.name} ({level.stars} Puntos)</p>
+                                    <p className="text-gray-600 mt-1">{level.reward}</p>
+                                    {currentStars >= level.stars && (
+                                        <span className="text-sm font-semibold text-green-600 mt-2 block">¡Desbloqueado!</span>
+                                    )}
+                                </div>
+                            ))}
+                            
+                        </div>
+                    </div>
+                )}
+
+                {currentTab === 'scan' && (
+                    <div className="p-6 bg-white rounded-xl shadow-2xl flex flex-col items-center text-center">
+                        <h2 className="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                            <QrCode className="w-6 h-6 mr-2" /> Muestra tu Tarjeta
+                        </h2>
+                        <p className="text-gray-600 mb-6">Muestra este código al empleado para acumular puntos o canjear recompensas.</p>
+                        
+                        {/* Generación del QR */}
+                        <div className="p-4 border-4 border-gray-200 rounded-lg bg-white shadow-inner">
+                            <img src={qrImageURL} alt="Código QR de Lealtad" className="w-56 h-56" onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/250x250/AAAAAA/FFFFFF?text=QR+Error"; }}/>
+                        </div>
+
+                        <p className="mt-4 text-sm font-mono text-gray-500 break-all">ID Cliente: {userId.substring(0, 12)}...</p>
+                    </div>
+                )}
+            </div>
+
+            {/* Barra de Navegación Inferior */}
+            <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-gray-200 shadow-xl rounded-t-xl">
+                <div className="flex justify-around items-center h-16">
+                    <button 
+                        className={`flex flex-col items-center p-2 rounded-lg ${currentTab === 'card' ? businessConfig.theme : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setCurrentTab('card')}
+                    >
+                        <User className="w-6 h-6" />
+                        <span className="text-xs">Tarjeta</span>
+                    </button>
+                    <button 
+                        className={`flex flex-col items-center p-2 rounded-lg ${currentTab === 'rewards' ? businessConfig.theme : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setCurrentTab('rewards')}
+                    >
+                        <Star className="w-6 h-6" />
+                        <span className="text-xs">Premios</span>
+                    </button>
+                    <button 
+                        className={`flex flex-col items-center p-2 rounded-lg ${currentTab === 'scan' ? businessConfig.theme : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setCurrentTab('scan')}
+                    >
+                        <QrCode className="w-6 h-6" />
+                        <span className="text-xs">Mi QR</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+/**
+ * Vista de Administración (Para Empleados/Dueños)
+ */
+const AdminView = ({ businessId, businessConfig, updateStars }) => {
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [pin, setPin] = useState('');
+    const [scanData, setScanData] = useState(''); // Usaría un scanner de verdad aquí, pero simulamos la entrada
+    const [customerStars, setCustomerStars] = useState(null);
+    const [customerUserId, setCustomerUserId] = useState(null);
+    const [message, setMessage] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    // --- LÓGICA DE FIREBASE PARA EL ADMIN ---
+
+    /**
+     * Busca la data del cliente por su ID y establece el listener.
+     * @param {string} cId - ID del cliente.
+     */
+    const fetchCustomerData = useCallback((cId) => {
+        if (!cId) return;
+
+        // Referencia a la base de datos (Colección: customers dentro del negocio)
+        const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', cId);
+
+        setLoading(true);
+        setMessage(null);
+        setCustomerUserId(cId);
+
+        // Listener en tiempo real (onSnapshot)
+        const unsubscribe = onSnapshot(customerRef, (docSnap) => {
+            setLoading(false);
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                setCustomerStars(data.stars || 0);
+                setMessage({ type: 'success', text: `Cliente ${cId.substring(0, 8)}... encontrado. Puntos actuales: ${data.stars || 0}.` });
+            } else {
+                setCustomerStars(0); // Cliente nuevo o no encontrado
+                setMessage({ type: 'error', text: `Cliente ${cId.substring(0, 8)}... no encontrado en este negocio. Inicializando con 0 puntos.` });
+            }
+        }, (error) => {
+            setLoading(false);
+            setMessage({ type: 'error', text: `Error al conectar con la base de datos: ${error.message}` });
         });
-      }
-      setLoading(false);
-    }, (error) => {
-        console.error("Error fetching user data:", error);
-        setLoading(false);
-    });
-    // ** FIX: Se removió 'db' de la dependencia ya que es una constante externa.
-    return () => unsubscribe();
-  }, [user]); 
 
-  const handleRedeem = async (cost, rewardName) => {
-    if (!userData || userData.points < cost || !user) return;
-    // Usamos safeAppId para garantizar un conteo de segmentos par.
-    const userRef = doc(db, 'artifacts', safeAppId, 'users', user.uid, 'loyalty_data', 'profile');
-    try {
-      await updateDoc(userRef, {
-        points: increment(-cost),
-        transactions: arrayUnion({
-          id: Date.now(), title: `Canje: ${rewardName}`, points: -cost, type: 'spend', date: new Date().toISOString()
-        })
-      });
-    } catch (error) {
-      console.error("Error redeeming reward:", error);
-    }
-  };
+        // Retornar la función de limpieza
+        return unsubscribe;
+    }, [businessId]);
 
-  if (loading) return <div className="flex h-screen items-center justify-center bg-gray-900 text-white">Cargando LoyalTap...</div>;
-
-  return (
-    <div className="flex flex-col h-screen bg-gray-50 text-gray-800 font-sans overflow-hidden max-w-md mx-auto shadow-2xl relative">
-      
-      {/* Top Bar Admin / Config */}
-      <div className="bg-gray-900 text-gray-400 p-2 px-4 flex justify-between items-center text-[10px] uppercase tracking-widest z-50">
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-white">LoyalTap v1.0</span>
-          <button onClick={() => setShowThemeSelector(!showThemeSelector)} className="bg-gray-800 p-1 rounded hover:text-white">
-             <Settings size={12} />
-          </button>
-        </div>
-        <button onClick={() => setIsBaristaMode(!isBaristaMode)} className="hover:text-white transition-colors flex gap-1 items-center">
-          {isBaristaMode ? <><User size={12}/> Ver App Cliente</> : <><Store size={12}/> Ir a Caja</>}
-        </button>
-      </div>
-
-      {/* Selector de Temas (Solo visible si se activa) */}
-      {showThemeSelector && (
-        <div className="absolute top-10 left-0 right-0 bg-gray-800 text-white p-4 z-50 shadow-xl border-b border-gray-700 animate-in slide-in-from-top">
-          <p className="text-xs text-gray-400 mb-3 font-bold">SELECCIONA NICHO (DEMO MODE)</p>
-          <div className="grid grid-cols-4 gap-2">
-            {Object.values(THEMES).map(t => (
-              <button 
-                key={t.id} 
-                onClick={() => { setCurrentTheme(t); setShowThemeSelector(false); }}
-                className={`flex flex-col items-center p-2 rounded-lg border transition-all ${currentTheme.id === t.id ? 'bg-gray-700 border-white' : 'border-transparent hover:bg-gray-700'}`}
-              >
-                <div className={`${t.colors.text} mb-1`}>{t.icon}</div>
-                <span className="text-[9px]">{t.name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {isBaristaMode ? (
-        <BaristaDashboard 
-          user={user} 
-          theme={currentTheme}
-          onExit={() => setIsBaristaMode(false)}
-          db={db}
-          appId={safeAppId} // Pasamos safeAppId al dashboard
-        />
-      ) : (
-        <ClientApp 
-          userData={userData} 
-          activeTab={activeTab} 
-          setActiveTab={setActiveTab}
-          onRedeem={handleRedeem}
-          theme={currentTheme}
-        />
-      )}
-    </div>
-  );
-}
-
-// --- VISTAS DEL CLIENTE ---
-
-function ClientApp({ userData, activeTab, setActiveTab, onRedeem, theme }) {
-  return (
-    <>
-      <header className="bg-white p-4 shadow-sm z-10 flex justify-between items-center">
-        <div className={`flex items-center gap-2 font-bold text-xl ${theme.colors.text}`}>
-          {theme.icon}
-          <span>{theme.appName}</span>
-        </div>
-        <div className={`text-xs px-2 py-1 rounded-full font-bold ${theme.colors.badge}`}>
-           {userData?.level || 'Bronce'}
-        </div>
-      </header>
-
-      <main className="flex-1 overflow-y-auto pb-20 scrollbar-hide">
-        {activeTab === 'home' && <HomeView userData={userData} theme={theme} />}
-        {activeTab === 'card' && <CardView userData={userData} theme={theme} />}
-        {activeTab === 'rewards' && <RewardsView userData={userData} onRedeem={onRedeem} theme={theme} />}
-        {activeTab === 'history' && <HistoryView transactions={userData?.transactions} theme={theme} />}
-      </main>
-
-      <nav className="bg-white border-t border-gray-200 absolute bottom-0 w-full h-16 flex justify-around items-center z-20 pb-safe">
-        <NavButton icon={<Star />} label="Inicio" isActive={activeTab === 'home'} onClick={() => setActiveTab('home')} theme={theme} />
-        <NavButton icon={<QrCode />} label="Tarjeta" isActive={activeTab === 'card'} onClick={() => setActiveTab('card')} theme={theme} />
-        <NavButton icon={<Gift />} label="Premios" isActive={activeTab === 'rewards'} onClick={() => setActiveTab('rewards')} theme={theme} />
-        <NavButton icon={<History />} label="Historial" isActive={activeTab === 'history'} onClick={() => setActiveTab('history')} theme={theme} />
-      </nav>
-    </>
-  );
-}
-
-function HomeView({ userData, theme }) {
-  const points = userData?.points || 0;
-  const nextReward = 150;
-  const progress = Math.min((points / nextReward) * 100, 100);
-
-  return (
-    <div className="p-6 space-y-6">
-      <div className="text-center space-y-1">
-        <h2 className={`text-2xl font-light ${theme.colors.textDark}`}>Hola, {userData?.name?.split(' ')[0]}</h2>
-        <p className={`text-sm ${theme.colors.text} opacity-80`}>¡Gracias por tu visita!</p>
-      </div>
-
-      <div className="relative w-64 h-64 mx-auto">
-        {/* Progress Circle */}
-        <svg className="w-full h-full transform -rotate-90">
-          <circle cx="128" cy="128" r="110" stroke="currentColor" strokeWidth="12" fill="transparent" className="text-gray-200" />
-          <circle 
-            cx="128" cy="128" r="110" 
-            stroke="currentColor" strokeWidth="12" fill="transparent" 
-            strokeDasharray={691} strokeDashoffset={691 - (691 * progress) / 100} 
-            className={`${theme.colors.text} transition-all duration-1000 ease-out`} 
-            strokeLinecap="round" 
-          />
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className={`text-6xl font-bold ${theme.colors.textDark}`}>{points}</span>
-          <span className={`text-sm font-medium uppercase tracking-wider mt-1 ${theme.colors.text}`}>{theme.currency}</span>
-        </div>
-      </div>
-
-      <div className={`${theme.colors.bgLight} p-4 rounded-xl flex gap-3 items-start border ${theme.colors.border}`}>
-         <Sparkles className={theme.colors.text} size={20} />
-         <p className={`text-sm ${theme.colors.textDark}`}>
-           Usa tu tarjeta digital en cada visita para subir de nivel y desbloquear mejores recompensas.
-         </p>
-      </div>
-    </div>
-  );
-}
-
-function RewardsView({ userData, onRedeem, theme }) {
-  return (
-    <div className="p-4 pb-24">
-      <div className="mb-6 sticky top-0 bg-gray-50/95 backdrop-blur-sm py-2 z-10">
-        <h2 className="text-xl font-bold text-gray-800 mb-1">Recompensas</h2>
-        <p className="text-sm text-gray-500">Saldo disponible: <span className={`font-bold ${theme.colors.text}`}>{userData?.points || 0} {theme.currency}</span></p>
-      </div>
-      <div className="space-y-3">
-        {theme.rewards.map((reward) => {
-          const canAfford = (userData?.points || 0) >= reward.cost;
-          return (
-            <div key={reward.id} className={`bg-white p-4 rounded-xl border flex justify-between items-center ${!canAfford && 'opacity-60 grayscale'}`}>
-              <div>
-                <h3 className="font-bold text-gray-800">{reward.name}</h3>
-                <p className="text-xs text-gray-500">{reward.desc}</p>
-              </div>
-              <button 
-                disabled={!canAfford}
-                onClick={() => onRedeem(reward.cost, reward.name)}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${canAfford ? `${theme.colors.primary} text-white ${theme.colors.primaryHover}` : 'bg-gray-200 text-gray-400'}`}
-              >
-                {reward.cost}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function CardView({ userData, theme }) {
-  return (
-    <div className={`p-6 flex flex-col items-center justify-center h-full space-y-8 ${theme.colors.bgLight}`}>
-      <div className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-sm aspect-[3/4] flex flex-col relative overflow-hidden border border-gray-100">
-        <div className={`absolute -top-20 -right-20 w-60 h-60 rounded-full opacity-10 blur-3xl ${theme.colors.primary}`}></div>
-        <div className="flex justify-between items-start mb-8">
-          <div className={theme.colors.text}>{theme.icon}</div>
-          <span className={`font-bold text-lg tracking-wider ${theme.colors.textDark} uppercase`}>{theme.appName}</span>
-        </div>
-        <div className="flex-1 flex items-center justify-center">
-           <div className="bg-gray-900 p-4 rounded-xl shadow-inner">
-              <QrCode className="text-white w-48 h-48" /> 
-           </div>
-        </div>
-        <div className="mt-8 text-center space-y-2">
-          <p className="text-gray-400 text-xs uppercase tracking-[0.2em]">ID DE MIEMBRO</p>
-          <p className="text-2xl font-mono text-gray-800 font-bold tracking-widest">{userData?.memberId || '---'}</p>
-        </div>
-      </div>
-      <div className="text-center space-y-1">
-        <p className="text-xs text-gray-400 uppercase tracking-widest">Powered by</p>
-        <p className="font-bold text-gray-800">LoyalTap</p>
-      </div>
-    </div>
-  );
-}
-
-function HistoryView({ transactions, theme }) {
-  const txArray = Array.isArray(transactions) ? transactions : [];
-  const sortedTx = [...txArray].sort((a, b) => new Date(b.date) - new Date(a.date));
-  
-  return (
-    <div className="p-4">
-      <h2 className="text-xl font-bold text-gray-800 mb-6">Historial</h2>
-      <div className="space-y-4 border-l-2 border-gray-200 ml-3 pl-6">
-        {sortedTx.map((tx) => (
-          <div key={tx.id} className="relative">
-             <div className={`absolute -left-[31px] top-1 w-4 h-4 rounded-full border-2 border-white ${tx.type === 'earn' ? theme.colors.primary : 'bg-gray-400'}`}></div>
-             <div className="flex justify-between">
-               <div>
-                 <p className="font-bold text-sm text-gray-800">{tx.title}</p>
-                 <p className="text-xs text-gray-400">{new Date(tx.date).toLocaleDateString()}</p>
-               </div>
-               <span className={`font-bold text-sm ${tx.type === 'earn' ? theme.colors.text : 'text-gray-500'}`}>
-                 {tx.type === 'earn' ? '+' : ''}{tx.points}
-               </span>
-             </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function NavButton({ icon, label, isActive, onClick, theme }) {
-  return (
-    <button onClick={onClick} className={`flex flex-col items-center justify-center w-full h-full transition-colors ${isActive ? theme.colors.text : 'text-gray-400 hover:text-gray-500'}`}>
-      {React.cloneElement(icon, { size: 24, strokeWidth: isActive ? 2.5 : 2 })}
-      <span className="text-[10px] mt-1 font-medium">{label}</span>
-    </button>
-  );
-}
-
-// --- MODO BARISTA / ADMIN ---
-
-function BaristaDashboard({ user, theme, db, appId }) { // Ahora recibe el appId seguro
-  const [scanMode, setScanMode] = useState(true);
-  const [manualId, setManualId] = useState('');
-  const [scannedUser, setScannedUser] = useState(null);
-  const [processing, setProcessing] = useState(false);
-  const [successMsg, setSuccessMsg] = useState('');
-
-  const simulateScan = () => {
-    // Simula que la cámara escanea el QR del usuario actual
-    if (!user) return;
-    setProcessing(true);
-    
-    // Usamos el appId que se pasó y que ya está sanitizado
-    const userRef = doc(db, 'artifacts', appId, 'users', user.uid, 'loyalty_data', 'profile');
-    
-    // Simulación de delay y fetch
-    setTimeout(async () => {
-        try {
-          // Importación dinámica necesaria para el entorno
-          const { getDoc } = await import('firebase/firestore'); 
-          const snap = await getDoc(userRef);
-          if (snap.exists()) {
-            setScannedUser({ uid: user.uid, ...snap.data() });
-          } else {
-            console.error("User not found in Firestore.");
-          }
-        } catch (error) {
-          console.error("Error simulating scan/fetch:", error);
+    // Lógica para añadir un punto
+    const handleAddStar = async (amount = 1) => {
+        if (!customerUserId) {
+            setMessage({ type: 'error', text: 'Primero escanea un ID de cliente válido.' });
+            return;
         }
-        setProcessing(false);
-    }, 1000);
-  };
 
-  const addPoints = async (amount, item) => {
-    if (!scannedUser || !scannedUser.uid) return;
-    setProcessing(true);
-    // Usamos el appId que se pasó y que ya está sanitizado
-    const userRef = doc(db, 'artifacts', appId, 'users', scannedUser.uid, 'loyalty_data', 'profile');
-    try {
-      await updateDoc(userRef, {
-        points: increment(amount),
-        transactions: arrayUnion({
-          id: Date.now(), title: `Compra: ${item}`, points: amount, type: 'earn', date: new Date().toISOString()
-        })
-      });
-      setSuccessMsg(`+${amount} ${theme.currency}`);
-      setTimeout(() => { setSuccessMsg(''); setScannedUser(null); }, 2000);
-    } catch (error) {
-      console.error("Error adding points:", error);
-    } finally {
-      setProcessing(false);
+        setLoading(true);
+        try {
+            // Referencia a la base de datos
+            const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', customerUserId);
+            
+            // Calculamos las nuevas estrellas
+            const newStars = (customerStars || 0) + amount;
+
+            // Actualizamos el documento. Si no existe, lo crea (setDoc con merge: true)
+            await setDoc(customerRef, {
+                stars: newStars,
+                lastVisit: new Date().toISOString(),
+            }, { merge: true }); // Usamos merge: true para no borrar otros campos
+
+            setMessage({ type: 'success', text: `¡Punto añadido! El cliente ahora tiene ${newStars} puntos.` });
+            // onSnapshot se encargará de actualizar customerStars automáticamente
+        } catch (error) {
+            console.error("Error adding star:", error);
+            setMessage({ type: 'error', text: `Error al añadir el punto: ${error.message}` });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+
+    // --- LÓGICA DE UI Y AUTENTICACIÓN ---
+
+    const handlePinSubmit = () => {
+        if (pin === ADMIN_PIN_CODE) {
+            setIsAuthenticated(true);
+        } else {
+            setMessage({ type: 'error', text: 'PIN incorrecto. Intenta de nuevo.' });
+            setPin('');
+        }
+    };
+
+    // Función para simular el escaneo del QR (en la vida real, se usaría un lector de códigos QR)
+    const handleScanSubmit = () => {
+        // En el QR del cliente el contenido es: businessId/userId
+        const parts = scanData.split('/');
+        
+        if (parts.length === 2 && parts[0] === businessId) {
+            const userIdFromQR = parts[1];
+            // Si el ID del negocio coincide, buscamos al cliente
+            fetchCustomerData(userIdFromQR);
+        } else {
+            setMessage({ type: 'error', text: 'El formato de QR es incorrecto o no pertenece a este negocio.' });
+        }
+    };
+
+    // --- RENDERIZADO ---
+
+    if (!isAuthenticated) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-gray-50">
+                <div className="p-8 bg-white rounded-xl shadow-2xl w-full max-w-sm text-center">
+                    <Lock className="w-8 h-8 mx-auto mb-4 text-red-500" />
+                    <h2 className="text-2xl font-bold text-gray-800 mb-6">Panel de Admin - {businessConfig.name}</h2>
+                    <input
+                        type="password"
+                        placeholder="Ingresa PIN de 4 dígitos"
+                        className="w-full p-3 mb-4 text-center text-xl tracking-widest border-2 border-gray-300 rounded-lg focus:border-red-500 outline-none"
+                        value={pin}
+                        onChange={(e) => setPin(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
+                        maxLength={4}
+                    />
+                    <button
+                        className="w-full p-3 font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 transition duration-150"
+                        onClick={handlePinSubmit}
+                    >
+                        Ingresar
+                    </button>
+                    {message && <Alert message={message.text} type={message.type} />}
+                </div>
+            </div>
+        );
     }
-  };
 
-  return (
-    <div className="flex flex-col h-full bg-gray-100">
-      <header className={`${theme.colors.primary} text-white p-4 shadow-md`}>
-        <h1 className="text-lg font-bold flex items-center gap-2">
-          <Store size={20} /> {theme.appName} POS
-        </h1>
-        <p className="text-white/70 text-xs">Modo Operador</p>
-      </header>
-
-      <main className="flex-1 p-4 overflow-y-auto">
-        {!scannedUser ? (
-          <div className="space-y-6 max-w-sm mx-auto mt-8">
-            <div className="bg-white p-1 rounded-lg flex shadow-sm">
-               <button onClick={() => setScanMode(true)} className={`flex-1 py-2 text-sm font-bold rounded ${scanMode ? `${theme.colors.badge}` : 'text-gray-500'}`}>Cámara</button>
-               <button onClick={() => setScanMode(false)} className={`flex-1 py-2 text-sm font-bold rounded ${!scanMode ? `${theme.colors.badge}` : 'text-gray-500'}`}>Manual</button>
+    return (
+        <div className="flex flex-col min-h-screen p-4 bg-gray-50">
+            {/* Encabezado Admin */}
+            <div className="p-4 rounded-lg shadow-md mb-6 bg-red-600 text-white">
+                <h1 className="text-2xl font-extrabold flex items-center">
+                    <LogIn className="w-6 h-6 mr-2" /> {businessConfig.name} - Admin
+                </h1>
+                <p className="mt-1 text-sm opacity-90">Añade puntos o canjea recompensas.</p>
             </div>
 
-            {scanMode ? (
-              <div className="bg-black rounded-2xl aspect-[3/4] relative flex flex-col items-center justify-center overflow-hidden shadow-lg">
-                 {processing ? (
-                   <div className="text-white animate-pulse flex flex-col items-center"><Scan size={48} className="mb-4"/><p>Procesando...</p></div>
-                 ) : (
-                   <>
-                     {/* Imagen de fondo simulada para la cámara */}
-                     <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1556742049-0cfed4f7a07d?auto=format&fit=crop&w=800&q=80')] opacity-40 bg-cover grayscale"></div>
-                     <div className={`z-10 w-64 h-64 border-2 rounded-lg flex items-center justify-center relative border-white/50`}>
-                        <div className="w-60 h-0.5 bg-red-500 absolute top-1/2 animate-ping"></div>
-                     </div>
-                     <button onClick={simulateScan} className="absolute bottom-8 bg-white text-black px-6 py-3 rounded-full font-bold text-sm shadow-lg z-20 hover:scale-105 transition-transform">
-                       [ SIMULAR LECTURA DE TARJETA ]
-                     </button>
-                   </>
-                 )}
-              </div>
-            ) : (
-              <div className="bg-white p-6 rounded-xl shadow space-y-4">
-                 <input 
-                    type="text" 
-                    placeholder="ID Cliente" 
-                    value={manualId}
-                    onChange={(e) => setManualId(e.target.value)}
-                    className="w-full text-2xl font-mono p-3 border rounded text-center outline-none focus:ring-2" 
-                 />
-                 <button className={`${theme.colors.primary} text-white w-full py-3 rounded font-bold`} disabled={true}>Buscar (Desactivado)</button>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="animate-in slide-in-from-bottom">
-             {successMsg ? (
-               <div className={`${theme.colors.badge} p-8 rounded-xl flex flex-col items-center text-center mb-6`}>
-                 <CheckCircle size={48} className="mb-2"/>
-                 <h3 className="text-xl font-bold">{successMsg}</h3>
-               </div>
-             ) : (
-               <>
-                 <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 flex justify-between items-center">
-                    <div>
-                       <h2 className="font-bold text-lg">{scannedUser.name}</h2>
-                       <span className={`${theme.colors.badge} text-[10px] px-2 py-1 rounded font-bold uppercase`}>{scannedUser.level}</span>
+            {/* Paso 1: Escanear ID */}
+            <div className="p-6 bg-white rounded-xl shadow-2xl mb-6">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">1. Escanear Tarjeta (Simulación)</h2>
+                <input
+                    type="text"
+                    placeholder={`Ej: ${businessId}/${Math.random().toString(36).substring(2, 10)}...`}
+                    className="w-full p-3 mb-3 border border-gray-300 rounded-lg focus:border-red-500 outline-none"
+                    value={scanData}
+                    onChange={(e) => setScanData(e.target.value)}
+                />
+                <button
+                    className="w-full p-3 font-semibold text-white bg-green-500 rounded-lg hover:bg-green-600 transition duration-150 flex items-center justify-center"
+                    onClick={handleScanSubmit}
+                    disabled={loading}
+                >
+                    <QrCode className="w-5 h-5 mr-2" /> Buscar Cliente
+                </button>
+                {message && message.type !== 'error' && message.type !== 'success' && <Alert message={message.text} type={message.type} />}
+            </div>
+
+            {/* Paso 2: Información y Puntos */}
+            <div className="p-6 bg-white rounded-xl shadow-2xl flex-grow">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">2. Otorgar Puntos</h2>
+                
+                {message && (message.type === 'error' || message.type === 'success') && <Alert message={message.text} type={message.type} />}
+
+                {customerUserId && (
+                    <div className="mt-4 p-4 border rounded-lg bg-gray-50">
+                        <p className="font-semibold text-gray-700">Cliente Activo:</p>
+                        <p className="text-sm font-mono break-all text-gray-500">{customerUserId}</p>
+                        <p className="text-3xl font-extrabold mt-2 flex items-center text-gray-800">
+                            {customerStars}
+                            <Star className="w-6 h-6 ml-2 text-yellow-500 fill-current" />
+                        </p>
+                        <p className="text-sm font-medium text-gray-500">Puntos actuales del cliente</p>
                     </div>
-                    <div className="text-right">
-                       <p className={`text-3xl font-bold ${theme.colors.text}`}>{scannedUser.points}</p>
-                       <p className="text-[10px] text-gray-400 uppercase">{theme.currency}</p>
-                    </div>
-                 </div>
-                 <div className="grid grid-cols-2 gap-3">
-                    {[10, 20, 50, 100].map(amt => (
-                      <button key={amt} onClick={() => addPoints(amt, 'Consumo General')} className="bg-white border hover:bg-gray-50 p-4 rounded-xl flex flex-col items-center gap-1 shadow-sm active:scale-95 transition-transform">
-                        <span className={`text-xl font-bold ${theme.colors.text}`}>+{amt}</span>
-                        <span className="text-xs text-gray-400">Agregar</span>
-                      </button>
-                    ))}
-                 </div>
-                 <button onClick={() => setScannedUser(null)} className="w-full mt-6 py-3 text-gray-400 text-sm font-bold">Cancelar Operación</button>
-               </>
-             )}
-          </div>
-        )}
-      </main>
-    </div>
-  );
+                )}
+                
+                <button
+                    className={`mt-6 w-full p-4 font-extrabold text-white rounded-lg transition duration-150 flex items-center justify-center ${customerUserId ? businessConfig.primaryColor : 'bg-gray-400 cursor-not-allowed'}`}
+                    onClick={() => handleAddStar(1)}
+                    disabled={loading || !customerUserId}
+                >
+                    {loading ? 'Añadiendo...' : `Añadir 1 ${businessConfig.icon.type.name}`}
+                </button>
+                <p className="mt-2 text-xs text-center text-gray-500">
+                    Solo presiona esto después de una compra exitosa.
+                </p>
+            </div>
+        </div>
+    );
+};
+
+// -----------------------------------------------------
+// COMPONENTE PRINCIPAL DE LA APP (Routing y Auth)
+// -----------------------------------------------------
+
+export default function App() {
+    const [userId, setUserId] = useState(null);
+    const [userData, setUserData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+
+    // 1. Lógica de Routing: Extraer el ID del Negocio y la Vista
+    const path = window.location.pathname; // ej: /coffee-star/admin
+    const pathParts = path.split('/').filter(p => p); // ej: ['coffee-star', 'admin']
+    
+    // El ID del negocio es la primera parte de la URL
+    const businessId = pathParts[0] || 'coffee-star'; // Default a 'coffee-star'
+    const isOwnerView = pathParts.length > 1 && pathParts[1] === 'admin';
+
+    // Obtener la configuración del negocio o un fallback
+    const businessConfig = BUSINESS_CONFIG[businessId] || BUSINESS_CONFIG['coffee-star'];
+
+    // 2. Lógica de Autenticación y Carga de Datos
+    useEffect(() => {
+        // Inicializar Auth con el token de Canvas o anónimamente
+        const initializeAuth = async () => {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Firebase Auth Error:", err);
+                setError("Error de autenticación. Verifica las reglas de seguridad.");
+            }
+        };
+
+        initializeAuth();
+
+        // Escucha el cambio de estado de autenticación
+        const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+            if (user) {
+                setUserId(user.uid);
+            } else {
+                setUserId(crypto.randomUUID()); // Si la autenticación falla, usamos un ID temporal
+            }
+            setIsAuthReady(true);
+            setLoading(false);
+        });
+
+        return () => {
+            unsubscribeAuth();
+        };
+    }, []);
+
+    // 3. Lógica de Carga de Datos del Cliente (Solo si NO es la vista de Admin)
+    useEffect(() => {
+        if (!isAuthReady || isOwnerView) return; // No cargar datos si es vista de Admin
+
+        let unsubscribeSnapshot = () => {};
+        
+        if (userId) {
+            // La referencia al documento ahora incluye el ID del negocio
+            const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', userId);
+
+            // Iniciar listener en tiempo real (onSnapshot)
+            unsubscribeSnapshot = onSnapshot(customerRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    setUserData(docSnap.data());
+                } else {
+                    // Inicializar datos para nuevos usuarios
+                    setUserData({ stars: 0, level: 'Novato', businessId: businessId });
+                    // No creamos el documento aquí, lo hará la función updateStars cuando gane un punto.
+                }
+            }, (err) => {
+                console.error("Firestore Snapshot Error:", err);
+                setError("Error al cargar datos del cliente.");
+            });
+        }
+        
+        return () => unsubscribeSnapshot();
+    }, [isAuthReady, userId, businessId, isOwnerView]);
+
+    // 4. Función para actualizar estrellas (Usada por ambos, pero el Admin la usa con el ID del cliente)
+    const updateStars = useCallback(async (newStars, targetUserId = userId) => {
+        if (!isAuthReady || !targetUserId) return;
+
+        try {
+            // La referencia al documento ahora incluye el ID del negocio
+            const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', targetUserId);
+            
+            // Usamos setDoc con merge: true para crear/actualizar
+            await setDoc(customerRef, {
+                stars: newStars,
+                lastVisit: new Date().toISOString(),
+                businessId: businessId // Aseguramos que el documento tenga el ID del negocio
+            }, { merge: true });
+
+        } catch (err) {
+            console.error("Error updating stars:", err);
+            setError("Error al actualizar los puntos. ¿Reglas de seguridad de Firestore correctas?");
+        }
+    }, [isAuthReady, userId, businessId]);
+
+
+    // 5. Renderizado Principal
+
+    if (loading || (!userData && !isOwnerView)) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-50">
+                <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-yellow-600"></div>
+                <p className="ml-4 text-gray-600">Cargando LoyalTap...</p>
+            </div>
+        );
+    }
+    
+    if (error) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-red-100 p-4">
+                <div className="text-red-700 text-center">
+                    <h1 className="text-xl font-bold">Error Crítico</h1>
+                    <p className="mt-2">{error}</p>
+                    <p className="mt-4 text-sm font-mono break-all">ID Negocio Solicitado: **{businessId}**</p>
+                    <p className="text-xs mt-2">Revisa tu conexión a Internet o la configuración de Firebase.</p>
+                </div>
+            </div>
+        );
+    }
+
+    // 6. Selección de Vista (Routing)
+
+    if (isOwnerView) {
+        return <AdminView businessId={businessId} businessConfig={businessConfig} updateStars={updateStars} />;
+    }
+
+    // Vista de Cliente
+    return (
+        <CustomerView 
+            userId={userId} 
+            userData={userData} 
+            businessId={businessId} 
+            businessConfig={businessConfig}
+            updateStars={updateStars} 
+        />
+    );
 }
