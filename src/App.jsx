@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { QrCode, LogIn, Star, Coffee, User, Lock, Send } from 'lucide-react';
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { QrCode, LogIn, Star, Coffee, User, Lock, Send, AlertTriangle } from 'lucide-react';
 
 // --- CONFIGURACIÓN GLOBAL (NO TOCAR) ---
 // Variables globales proporcionadas por el entorno (Canvas)
@@ -51,32 +51,38 @@ const BUSINESS_CONFIG = {
  * Determina el nivel y la recompensa del usuario.
  * @param {number} stars - El número actual de puntos/estrellas del usuario.
  * @param {Array} configLevels - La configuración de niveles del negocio.
- * @returns {{name: string, color: string, reward: string}}
+ * @returns {{name: string, color: string, reward: string, nextStars: number, nextLevel: object | null}}
  */
 const getLevelInfo = (stars, configLevels) => {
-    // Buscar el nivel más alto que el usuario ha alcanzado
-    const sortedLevels = [...configLevels].sort((a, b) => b.stars - a.stars);
+    // Ordenar los niveles de menor a mayor para el cálculo de progreso
+    const sortedLevels = [...configLevels].sort((a, b) => a.stars - b.stars);
+    
+    // Buscar el nivel actual y el siguiente
+    let currentLevel = { name: 'Novato', color: 'text-gray-500', reward: 'Sube de nivel para desbloquear grandes recompensas.', stars: 0 };
+    let nextLevel = null;
     
     for (const level of sortedLevels) {
         if (stars >= level.stars) {
-            return {
-                name: level.name,
-                color: level.color,
-                reward: level.reward,
-                nextStars: 0 // No hay más niveles
-            };
+            currentLevel = { ...level, color: level.color }; // Usuario ha alcanzado este nivel
+        } else if (!nextLevel) {
+            nextLevel = level; // Este es el próximo nivel a alcanzar
         }
     }
-    
-    // Si no tiene el primer nivel, buscamos cuántas faltan para el primero
-    const firstLevelStars = configLevels.length > 0 ? configLevels[configLevels.length - 1].stars : 5;
-    const remaining = firstLevelStars - stars;
 
+    if (nextLevel) {
+        const remaining = nextLevel.stars - stars;
+        return {
+            ...currentLevel,
+            nextStars: remaining,
+            nextLevel: nextLevel
+        };
+    }
+
+    // Si no hay más niveles
     return {
-        name: 'Novato',
-        color: 'text-gray-500',
-        reward: 'Sube de nivel para desbloquear grandes recompensas.',
-        nextStars: remaining > 0 ? remaining : 0
+        ...currentLevel,
+        nextStars: 0, // No hay más niveles
+        nextLevel: null
     };
 };
 
@@ -84,19 +90,24 @@ const getLevelInfo = (stars, configLevels) => {
  * Componente para mostrar mensajes de error/éxito
  */
 const Alert = ({ message, type }) => {
-    const baseClasses = "p-4 mb-4 text-sm rounded-lg";
+    const baseClasses = "p-4 mb-4 text-sm rounded-lg flex items-center";
     let typeClasses = "";
+    let icon = null;
 
     if (type === 'error') {
         typeClasses = "bg-red-100 text-red-700";
+        icon = <AlertTriangle className="w-4 h-4 mr-2" />;
     } else if (type === 'success') {
         typeClasses = "bg-green-100 text-green-700";
+        icon = <Star className="w-4 h-4 mr-2" />;
     } else {
         typeClasses = "bg-blue-100 text-blue-700";
+        icon = <User className="w-4 h-4 mr-2" />;
     }
 
     return (
         <div className={`${baseClasses} ${typeClasses}`} role="alert">
+            {icon}
             {message}
         </div>
     );
@@ -109,22 +120,19 @@ const Alert = ({ message, type }) => {
 /**
  * Vista de la Tarjeta de Lealtad del Cliente
  */
-const CustomerView = ({ userId, userData, businessId, businessConfig, updateStars }) => {
+const CustomerView = ({ userId, userData, businessId, businessConfig }) => {
     const [currentTab, setCurrentTab] = useState('card'); // 'card', 'rewards', 'scan'
     const currentStars = userData.stars || 0;
     const levelInfo = getLevelInfo(currentStars, businessConfig.levels);
-    const { name, color, reward, nextStars } = levelInfo;
+    const { name, color, nextStars, nextLevel } = levelInfo;
 
     // Calculamos el progreso para la barra (para el siguiente nivel)
-    const sortedLevels = [...businessConfig.levels].sort((a, b) => a.stars - b.stars);
-    const nextLevel = sortedLevels.find(l => l.stars > currentStars);
-    
     let progress = 0;
-    let target = 0;
     
     if (nextLevel) {
-        const previousLevel = sortedLevels.slice().reverse().find(l => l.stars <= currentStars) || { stars: 0 };
-        target = nextLevel.stars;
+        const sortedLevels = [...businessConfig.levels].sort((a, b) => a.stars - b.stars);
+        const previousLevel = sortedLevels.slice().reverse().find(l => l.stars <= currentStars && l.stars !== nextLevel.stars) || { stars: 0 };
+        const target = nextLevel.stars;
         const progressRange = target - previousLevel.stars;
         const currentProgress = currentStars - previousLevel.stars;
         progress = progressRange > 0 ? (currentProgress / progressRange) * 100 : 100;
@@ -137,12 +145,12 @@ const CustomerView = ({ userId, userData, businessId, businessConfig, updateStar
     const qrImageURL = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrData)}`;
 
     return (
-        <div className="flex flex-col min-h-screen p-4 pb-20 bg-gray-50">
+        <div className="flex flex-col min-h-screen p-4 pb-20 bg-gray-50 font-inter">
             {/* Encabezado */}
-            <div className={`p-4 rounded-lg shadow-md mb-6 ${businessConfig.primaryColor} text-white`}>
+            <div className={`p-4 rounded-xl shadow-lg mb-6 ${businessConfig.primaryColor} text-white`}>
                 <div className="flex items-center space-x-3">
-                    {businessConfig.icon}
-                    <h1 className="text-2xl font-extrabold">{businessConfig.name}</h1>
+                    {React.cloneElement(businessConfig.icon, { size: 32 })}
+                    <h1 className="text-3xl font-extrabold">{businessConfig.name}</h1>
                 </div>
                 <p className="mt-1 text-sm opacity-90">Tu tarjeta de lealtad digital.</p>
             </div>
@@ -150,7 +158,7 @@ const CustomerView = ({ userId, userData, businessId, businessConfig, updateStar
             {/* Contenido Principal */}
             <div className="flex-grow">
                 {currentTab === 'card' && (
-                    <div className="p-6 bg-white rounded-xl shadow-2xl">
+                    <div className="p-6 bg-white rounded-xl shadow-2xl transition duration-300 transform hover:scale-[1.01]">
                         <div className="flex justify-between items-center mb-4">
                             <h2 className="text-xl font-semibold text-gray-700 flex items-center">
                                 <User className="w-5 h-5 mr-2" /> Mi Cuenta
@@ -163,27 +171,33 @@ const CustomerView = ({ userId, userData, businessId, businessConfig, updateStar
                         {/* Contenedor de Estrellas */}
                         <div className="flex flex-col items-center justify-center p-6 mb-4 rounded-lg bg-gray-50 border border-gray-200">
                             <Star className={`w-12 h-12 mb-2 ${color} fill-current`} />
-                            <p className="text-4xl font-extrabold text-gray-800">{currentStars}</p>
+                            <p className="text-5xl font-extrabold text-gray-800">{currentStars}</p>
                             <p className="text-sm font-medium text-gray-500">
-                                {businessConfig.levels.length > 0 ? businessConfig.icon.type.name : 'Puntos'} Acumulados
+                                {businessConfig.icon.type.name === 'Coffee' ? 'Cafés' : 'Puntos'} Acumulados
                             </p>
                         </div>
 
                         {/* Barra de Progreso */}
                         {nextLevel && (
                             <div className="mt-4">
-                                <p className="text-sm font-medium text-gray-600 mb-1">
-                                    Faltan {nextStars} {businessConfig.icon.type.name} para Nivel {nextLevel.name}
+                                <p className="text-sm font-medium text-gray-600 mb-1 flex justify-between">
+                                    <span>Faltan **{nextStars}** {businessConfig.icon.type.name === 'Coffee' ? 'cafés' : 'puntos'} para Nivel **{nextLevel.name}**</span>
+                                    <span className='font-bold'>{Math.round(progress)}%</span>
                                 </p>
-                                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
                                     <div 
-                                        className={`h-2.5 rounded-full ${businessConfig.primaryColor.split(' ')[0]}`} 
+                                        className={`h-2.5 rounded-full ${businessConfig.primaryColor.split(' ')[0]} transition-all duration-500`} 
                                         style={{ width: `${progress}%` }}
                                     ></div>
                                 </div>
                             </div>
                         )}
                         
+                        {!nextLevel && (
+                             <div className="mt-4 p-3 bg-green-100 text-green-700 rounded-lg text-center font-semibold">
+                                 ¡Felicidades! Has alcanzado el nivel máximo ({name}).
+                             </div>
+                        )}
                     </div>
                 )}
 
@@ -193,15 +207,21 @@ const CustomerView = ({ userId, userData, businessId, businessConfig, updateStar
                             <Star className="w-6 h-6 mr-2 text-yellow-500" /> Mis Recompensas
                         </h2>
                         <div className="space-y-4">
-                            {businessConfig.levels.map((level, index) => (
+                            {[...businessConfig.levels].sort((a, b) => a.stars - b.stars).map((level, index) => (
                                 <div 
                                     key={index}
-                                    className={`p-4 rounded-lg border-l-4 ${currentStars >= level.stars ? 'border-green-500 bg-green-50' : 'border-gray-300 bg-gray-100'}`}
+                                    className={`p-4 rounded-lg border-l-4 transition duration-200 ${currentStars >= level.stars ? 'border-green-500 bg-green-50 shadow-md' : 'border-gray-300 bg-gray-100'}`}
                                 >
-                                    <p className="font-bold text-lg text-gray-800">{level.name} ({level.stars} Puntos)</p>
-                                    <p className="text-gray-600 mt-1">{level.reward}</p>
-                                    {currentStars >= level.stars && (
-                                        <span className="text-sm font-semibold text-green-600 mt-2 block">¡Desbloqueado!</span>
+                                    <p className="font-extrabold text-lg text-gray-800">{level.name} ({level.stars} Puntos)</p>
+                                    <p className="text-gray-600 mt-1 italic">{level.reward}</p>
+                                    {currentStars >= level.stars ? (
+                                        <span className="text-sm font-semibold text-green-600 mt-2 block flex items-center">
+                                            <Star className='w-4 h-4 mr-1 fill-current'/> ¡RECOMPENSA ACTIVA!
+                                        </span>
+                                    ) : (
+                                        <span className="text-sm font-semibold text-gray-500 mt-2 block">
+                                            Necesitas {level.stars - currentStars} puntos más.
+                                        </span>
                                     )}
                                 </div>
                             ))}
@@ -218,34 +238,34 @@ const CustomerView = ({ userId, userData, businessId, businessConfig, updateStar
                         <p className="text-gray-600 mb-6">Muestra este código al empleado para acumular puntos o canjear recompensas.</p>
                         
                         {/* Generación del QR */}
-                        <div className="p-4 border-4 border-gray-200 rounded-lg bg-white shadow-inner">
-                            <img src={qrImageURL} alt="Código QR de Lealtad" className="w-56 h-56" onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/250x250/AAAAAA/FFFFFF?text=QR+Error"; }}/>
+                        <div className="p-4 border-4 border-gray-200 rounded-xl bg-white shadow-inner">
+                            <img src={qrImageURL} alt="Código QR de Lealtad" className="w-60 h-60" onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/250x250/AAAAAA/FFFFFF?text=Error+al+cargar+QR"; }}/>
                         </div>
 
-                        <p className="mt-4 text-sm font-mono text-gray-500 break-all">ID Cliente: {userId.substring(0, 12)}...</p>
+                        <p className="mt-4 text-sm font-mono text-gray-500 break-all">ID Cliente: {userId}</p>
                     </div>
                 )}
             </div>
 
             {/* Barra de Navegación Inferior */}
-            <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-gray-200 shadow-xl rounded-t-xl">
+            <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t-2 border-gray-100 shadow-2xl rounded-t-xl z-10">
                 <div className="flex justify-around items-center h-16">
                     <button 
-                        className={`flex flex-col items-center p-2 rounded-lg ${currentTab === 'card' ? businessConfig.theme : 'text-gray-500 hover:text-gray-700'}`}
+                        className={`flex flex-col items-center p-2 transition duration-200 ${currentTab === 'card' ? `${businessConfig.theme} font-bold` : 'text-gray-500 hover:text-gray-700'}`}
                         onClick={() => setCurrentTab('card')}
                     >
                         <User className="w-6 h-6" />
                         <span className="text-xs">Tarjeta</span>
                     </button>
                     <button 
-                        className={`flex flex-col items-center p-2 rounded-lg ${currentTab === 'rewards' ? businessConfig.theme : 'text-gray-500 hover:text-gray-700'}`}
+                        className={`flex flex-col items-center p-2 transition duration-200 ${currentTab === 'rewards' ? `${businessConfig.theme} font-bold` : 'text-gray-500 hover:text-gray-700'}`}
                         onClick={() => setCurrentTab('rewards')}
                     >
                         <Star className="w-6 h-6" />
                         <span className="text-xs">Premios</span>
                     </button>
                     <button 
-                        className={`flex flex-col items-center p-2 rounded-lg ${currentTab === 'scan' ? businessConfig.theme : 'text-gray-500 hover:text-gray-700'}`}
+                        className={`flex flex-col items-center p-2 transition duration-200 ${currentTab === 'scan' ? `${businessConfig.theme} font-bold` : 'text-gray-500 hover:text-gray-700'}`}
                         onClick={() => setCurrentTab('scan')}
                     >
                         <QrCode className="w-6 h-6" />
@@ -260,10 +280,10 @@ const CustomerView = ({ userId, userData, businessId, businessConfig, updateStar
 /**
  * Vista de Administración (Para Empleados/Dueños)
  */
-const AdminView = ({ businessId, businessConfig, updateStars }) => {
+const AdminView = ({ businessId, businessConfig }) => {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [pin, setPin] = useState('');
-    const [scanData, setScanData] = useState(''); // Usaría un scanner de verdad aquí, pero simulamos la entrada
+    const [scanData, setScanData] = useState(''); // Contenido simulado del QR
     const [customerStars, setCustomerStars] = useState(null);
     const [customerUserId, setCustomerUserId] = useState(null);
     const [message, setMessage] = useState(null);
@@ -272,41 +292,49 @@ const AdminView = ({ businessId, businessConfig, updateStars }) => {
     // --- LÓGICA DE FIREBASE PARA EL ADMIN ---
 
     /**
-     * Busca la data del cliente por su ID y establece el listener.
-     * @param {string} cId - ID del cliente.
+     * EFECTO: Suscribe/Cancela la escucha de Firestore cuando customerUserId cambia.
      */
-    const fetchCustomerData = useCallback((cId) => {
-        if (!cId) return;
+    useEffect(() => {
+        if (!customerUserId) {
+            // No hay cliente seleccionado, no hay listener.
+            setCustomerStars(null);
+            return;
+        }
 
-        // Referencia a la base de datos (Colección: customers dentro del negocio)
-        const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', cId);
-
+        // 1. Mostrar estado de búsqueda
         setLoading(true);
         setMessage(null);
-        setCustomerUserId(cId);
 
-        // Listener en tiempo real (onSnapshot)
+        // 2. Referencia a la base de datos (Colección: customers dentro del negocio)
+        const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', customerUserId);
+
+        // 3. Establecer Listener en tiempo real (onSnapshot)
         const unsubscribe = onSnapshot(customerRef, (docSnap) => {
             setLoading(false);
             if (docSnap.exists()) {
                 const data = docSnap.data();
                 setCustomerStars(data.stars || 0);
-                setMessage({ type: 'success', text: `Cliente ${cId.substring(0, 8)}... encontrado. Puntos actuales: ${data.stars || 0}.` });
+                setMessage({ type: 'success', text: `Cliente ${customerUserId.substring(0, 8)}... encontrado. Puntos actuales: ${data.stars || 0}.` });
             } else {
-                setCustomerStars(0); // Cliente nuevo o no encontrado
-                setMessage({ type: 'error', text: `Cliente ${cId.substring(0, 8)}... no encontrado en este negocio. Inicializando con 0 puntos.` });
+                // Cliente nuevo o no encontrado
+                setCustomerStars(0); 
+                setMessage({ type: 'info', text: `Cliente ${customerUserId.substring(0, 8)}... no tiene registro en este negocio. Inicializando con 0 puntos.` });
             }
         }, (error) => {
             setLoading(false);
+            console.error("Firestore Snapshot Error:", error);
             setMessage({ type: 'error', text: `Error al conectar con la base de datos: ${error.message}` });
         });
 
-        // Retornar la función de limpieza
-        return unsubscribe;
-    }, [businessId]);
+        // 4. FUNCIÓN DE LIMPIEZA: Cancela el listener cuando el componente se desmonta o customerUserId cambia.
+        return () => {
+            unsubscribe();
+            // console.log(`Listener cancelado para: ${customerUserId}`);
+        };
+    }, [customerUserId, businessId]); // Depende del ID del cliente y del negocio
 
-    // Lógica para añadir un punto
-    const handleAddStar = async (amount = 1) => {
+    // Lógica para añadir/restar puntos
+    const handleUpdateStar = async (amount) => {
         if (!customerUserId) {
             setMessage({ type: 'error', text: 'Primero escanea un ID de cliente válido.' });
             return;
@@ -317,20 +345,22 @@ const AdminView = ({ businessId, businessConfig, updateStars }) => {
             // Referencia a la base de datos
             const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', customerUserId);
             
-            // Calculamos las nuevas estrellas
-            const newStars = (customerStars || 0) + amount;
+            // Calculamos las nuevas estrellas. Nos aseguramos de que no sean negativas.
+            const current = customerStars !== null ? customerStars : 0;
+            const newStars = Math.max(0, current + amount);
 
             // Actualizamos el documento. Si no existe, lo crea (setDoc con merge: true)
             await setDoc(customerRef, {
                 stars: newStars,
                 lastVisit: new Date().toISOString(),
-            }, { merge: true }); // Usamos merge: true para no borrar otros campos
+                businessId: businessId // Aseguramos que el documento tenga el ID del negocio
+            }, { merge: true });
 
-            setMessage({ type: 'success', text: `¡Punto añadido! El cliente ahora tiene ${newStars} puntos.` });
-            // onSnapshot se encargará de actualizar customerStars automáticamente
+            // El onSnapshot se encarga de actualizar el estado de las estrellas automáticamente
+            setMessage({ type: 'success', text: `¡${amount > 0 ? 'Punto(s) añadido(s)' : 'Punto(s) restado(s)'}! El cliente ahora tiene ${newStars} puntos.` });
         } catch (error) {
-            console.error("Error adding star:", error);
-            setMessage({ type: 'error', text: `Error al añadir el punto: ${error.message}` });
+            console.error("Error updating stars:", error);
+            setMessage({ type: 'error', text: `Error al actualizar los puntos: ${error.message}` });
         } finally {
             setLoading(false);
         }
@@ -348,15 +378,19 @@ const AdminView = ({ businessId, businessConfig, updateStars }) => {
         }
     };
 
-    // Función para simular el escaneo del QR (en la vida real, se usaría un lector de códigos QR)
+    // Función para simular el escaneo del QR (ahora solo extrae y establece el ID del cliente)
     const handleScanSubmit = () => {
-        // En el QR del cliente el contenido es: businessId/userId
+        // Formato esperado: businessId/userId
         const parts = scanData.split('/');
         
+        // Limpiar el estado del cliente anterior
+        setCustomerUserId(null); 
+        setCustomerStars(null);
+
         if (parts.length === 2 && parts[0] === businessId) {
             const userIdFromQR = parts[1];
-            // Si el ID del negocio coincide, buscamos al cliente
-            fetchCustomerData(userIdFromQR);
+            // Al establecer customerUserId, el useEffect se activa y establece el listener.
+            setCustomerUserId(userIdFromQR); 
         } else {
             setMessage({ type: 'error', text: 'El formato de QR es incorrecto o no pertenece a este negocio.' });
         }
@@ -366,39 +400,41 @@ const AdminView = ({ businessId, businessConfig, updateStars }) => {
 
     if (!isAuthenticated) {
         return (
-            <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-gray-50">
+            <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-gray-100 font-inter">
                 <div className="p-8 bg-white rounded-xl shadow-2xl w-full max-w-sm text-center">
-                    <Lock className="w-8 h-8 mx-auto mb-4 text-red-500" />
+                    <Lock className="w-10 h-10 mx-auto mb-4 text-red-600" />
                     <h2 className="text-2xl font-bold text-gray-800 mb-6">Panel de Admin - {businessConfig.name}</h2>
                     <input
                         type="password"
                         placeholder="Ingresa PIN de 4 dígitos"
-                        className="w-full p-3 mb-4 text-center text-xl tracking-widest border-2 border-gray-300 rounded-lg focus:border-red-500 outline-none"
+                        className="w-full p-3 mb-4 text-center text-xl tracking-widest border-2 border-gray-300 rounded-lg focus:border-red-500 outline-none transition duration-150"
                         value={pin}
                         onChange={(e) => setPin(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
                         maxLength={4}
                     />
                     <button
-                        className="w-full p-3 font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 transition duration-150"
+                        className="w-full p-3 font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition duration-150 shadow-md"
                         onClick={handlePinSubmit}
                     >
                         Ingresar
                     </button>
-                    {message && <Alert message={message.text} type={message.type} />}
+                    {message && <div className="mt-4"><Alert message={message.text} type={message.type} /></div>}
                 </div>
             </div>
         );
     }
 
+    const levelInfo = getLevelInfo(customerStars || 0, businessConfig.levels);
+
     return (
-        <div className="flex flex-col min-h-screen p-4 bg-gray-50">
+        <div className="flex flex-col min-h-screen p-4 bg-gray-100 font-inter">
             {/* Encabezado Admin */}
-            <div className="p-4 rounded-lg shadow-md mb-6 bg-red-600 text-white">
+            <div className="p-4 rounded-xl shadow-lg mb-6 bg-red-600 text-white">
                 <h1 className="text-2xl font-extrabold flex items-center">
                     <LogIn className="w-6 h-6 mr-2" /> {businessConfig.name} - Admin
                 </h1>
-                <p className="mt-1 text-sm opacity-90">Añade puntos o canjea recompensas.</p>
+                <p className="mt-1 text-sm opacity-90">Añade o resta puntos de lealtad.</p>
             </div>
 
             {/* Paso 1: Escanear ID */}
@@ -406,49 +442,69 @@ const AdminView = ({ businessId, businessConfig, updateStars }) => {
                 <h2 className="text-xl font-bold text-gray-800 mb-4">1. Escanear Tarjeta (Simulación)</h2>
                 <input
                     type="text"
-                    placeholder={`Ej: ${businessId}/${Math.random().toString(36).substring(2, 10)}...`}
-                    className="w-full p-3 mb-3 border border-gray-300 rounded-lg focus:border-red-500 outline-none"
+                    placeholder={`Ej: ${businessId}/${crypto.randomUUID().substring(0, 8)}...`}
+                    className="w-full p-3 mb-3 border border-gray-300 rounded-lg focus:border-red-500 outline-none transition duration-150"
                     value={scanData}
                     onChange={(e) => setScanData(e.target.value)}
                 />
                 <button
-                    className="w-full p-3 font-semibold text-white bg-green-500 rounded-lg hover:bg-green-600 transition duration-150 flex items-center justify-center"
+                    className="w-full p-3 font-semibold text-white bg-green-500 rounded-lg hover:bg-green-600 transition duration-150 shadow-md flex items-center justify-center"
                     onClick={handleScanSubmit}
                     disabled={loading}
                 >
                     <QrCode className="w-5 h-5 mr-2" /> Buscar Cliente
                 </button>
-                {message && message.type !== 'error' && message.type !== 'success' && <Alert message={message.text} type={message.type} />}
             </div>
 
             {/* Paso 2: Información y Puntos */}
             <div className="p-6 bg-white rounded-xl shadow-2xl flex-grow">
-                <h2 className="text-xl font-bold text-gray-800 mb-4">2. Otorgar Puntos</h2>
+                <h2 className="text-xl font-bold text-gray-800 mb-4">2. Otorgar o Restar Puntos</h2>
                 
-                {message && (message.type === 'error' || message.type === 'success') && <Alert message={message.text} type={message.type} />}
+                {message && <Alert message={message.text} type={message.type} />}
 
-                {customerUserId && (
-                    <div className="mt-4 p-4 border rounded-lg bg-gray-50">
+                {customerUserId && customerStars !== null && (
+                    <div className="mt-4 p-4 border border-gray-200 rounded-lg bg-gray-50 text-center">
                         <p className="font-semibold text-gray-700">Cliente Activo:</p>
-                        <p className="text-sm font-mono break-all text-gray-500">{customerUserId}</p>
-                        <p className="text-3xl font-extrabold mt-2 flex items-center text-gray-800">
+                        <p className="text-xs font-mono break-all text-gray-500 mb-2">ID: {customerUserId}</p>
+                        <span className={`px-3 py-1 text-xs font-bold rounded-full ${levelInfo.color} bg-opacity-20`}>
+                            Nivel {levelInfo.name}
+                        </span>
+                        
+                        <p className="text-4xl font-extrabold mt-3 flex items-center justify-center text-gray-800">
                             {customerStars}
                             <Star className="w-6 h-6 ml-2 text-yellow-500 fill-current" />
                         </p>
-                        <p className="text-sm font-medium text-gray-500">Puntos actuales del cliente</p>
+                        <p className="text-sm font-medium text-gray-500">Puntos actuales</p>
+
+                        <div className='flex space-x-2 mt-4'>
+                             <button
+                                className={`flex-1 p-3 font-extrabold text-white rounded-lg transition duration-150 shadow-md flex items-center justify-center ${businessConfig.primaryColor}`}
+                                onClick={() => handleUpdateStar(1)}
+                                disabled={loading}
+                            >
+                                +1 {businessConfig.icon.type.name === 'Coffee' ? 'Café' : 'Punto'}
+                            </button>
+                            <button
+                                className='w-1/4 p-3 font-extrabold text-gray-700 bg-red-200 rounded-lg hover:bg-red-300 transition duration-150 shadow-md flex items-center justify-center'
+                                onClick={() => handleUpdateStar(-1)}
+                                disabled={loading || customerStars === 0}
+                            >
+                                -1
+                            </button>
+                        </div>
+                       
+                        <p className="mt-3 text-xs text-center text-gray-500">
+                            Usa **+1** para una compra, **-1** para canjear un punto.
+                        </p>
                     </div>
                 )}
                 
-                <button
-                    className={`mt-6 w-full p-4 font-extrabold text-white rounded-lg transition duration-150 flex items-center justify-center ${customerUserId ? businessConfig.primaryColor : 'bg-gray-400 cursor-not-allowed'}`}
-                    onClick={() => handleAddStar(1)}
-                    disabled={loading || !customerUserId}
-                >
-                    {loading ? 'Añadiendo...' : `Añadir 1 ${businessConfig.icon.type.name}`}
-                </button>
-                <p className="mt-2 text-xs text-center text-gray-500">
-                    Solo presiona esto después de una compra exitosa.
-                </p>
+                {customerUserId && customerStars === null && (
+                     <div className='text-center p-8 bg-gray-50 rounded-lg'>
+                        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-yellow-600 mx-auto"></div>
+                        <p className="mt-3 text-gray-600">Buscando datos del cliente...</p>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -499,7 +555,8 @@ export default function App() {
             if (user) {
                 setUserId(user.uid);
             } else {
-                setUserId(crypto.randomUUID()); // Si la autenticación falla, usamos un ID temporal
+                // Si la autenticación falla, usamos un ID temporal (aunque Firestore requerirá Auth)
+                setUserId(crypto.randomUUID()); 
             }
             setIsAuthReady(true);
             setLoading(false);
@@ -512,82 +569,61 @@ export default function App() {
 
     // 3. Lógica de Carga de Datos del Cliente (Solo si NO es la vista de Admin)
     useEffect(() => {
-        if (!isAuthReady || isOwnerView) return; // No cargar datos si es vista de Admin
+        if (!isAuthReady || isOwnerView || !userId) return; // No cargar datos si es vista de Admin o no hay userId
 
         let unsubscribeSnapshot = () => {};
         
-        if (userId) {
-            // La referencia al documento ahora incluye el ID del negocio
-            const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', userId);
+        // La referencia al documento ahora incluye el ID del negocio.
+        // La colección de clientes es pública, pero por seguridad se anida bajo el businessId
+        const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', userId);
 
-            // Iniciar listener en tiempo real (onSnapshot)
-            unsubscribeSnapshot = onSnapshot(customerRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    setUserData(docSnap.data());
-                } else {
-                    // Inicializar datos para nuevos usuarios
-                    setUserData({ stars: 0, level: 'Novato', businessId: businessId });
-                    // No creamos el documento aquí, lo hará la función updateStars cuando gane un punto.
-                }
-            }, (err) => {
-                console.error("Firestore Snapshot Error:", err);
-                setError("Error al cargar datos del cliente.");
-            });
-        }
+        // Iniciar listener en tiempo real (onSnapshot)
+        unsubscribeSnapshot = onSnapshot(customerRef, (docSnap) => {
+            if (docSnap.exists()) {
+                setUserData(docSnap.data());
+            } else {
+                // Inicializar datos para nuevos usuarios
+                setUserData({ stars: 0, level: 'Novato', businessId: businessId });
+                // El documento se creará en Firestore cuando el admin añada el primer punto.
+            }
+        }, (err) => {
+            console.error("Firestore Snapshot Error:", err);
+            setError("Error al cargar datos del cliente.");
+        });
         
         return () => unsubscribeSnapshot();
     }, [isAuthReady, userId, businessId, isOwnerView]);
 
-    // 4. Función para actualizar estrellas (Usada por ambos, pero el Admin la usa con el ID del cliente)
-    const updateStars = useCallback(async (newStars, targetUserId = userId) => {
-        if (!isAuthReady || !targetUserId) return;
 
-        try {
-            // La referencia al documento ahora incluye el ID del negocio
-            const customerRef = doc(db, 'artifacts', appId, 'public', 'data', businessId, 'customers', targetUserId);
-            
-            // Usamos setDoc con merge: true para crear/actualizar
-            await setDoc(customerRef, {
-                stars: newStars,
-                lastVisit: new Date().toISOString(),
-                businessId: businessId // Aseguramos que el documento tenga el ID del negocio
-            }, { merge: true });
+    // 4. Renderizado Principal
 
-        } catch (err) {
-            console.error("Error updating stars:", err);
-            setError("Error al actualizar los puntos. ¿Reglas de seguridad de Firestore correctas?");
-        }
-    }, [isAuthReady, userId, businessId]);
-
-
-    // 5. Renderizado Principal
-
-    if (loading || (!userData && !isOwnerView)) {
+    if (loading) {
         return (
-            <div className="flex items-center justify-center min-h-screen bg-gray-50">
-                <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-yellow-600"></div>
-                <p className="ml-4 text-gray-600">Cargando LoyalTap...</p>
+            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 font-inter">
+                <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-yellow-600"></div>
+                <p className="ml-4 text-gray-600 mt-4 font-semibold">Cargando LoyalTap...</p>
             </div>
         );
     }
     
     if (error) {
         return (
-            <div className="flex items-center justify-center min-h-screen bg-red-100 p-4">
-                <div className="text-red-700 text-center">
-                    <h1 className="text-xl font-bold">Error Crítico</h1>
+            <div className="flex items-center justify-center min-h-screen bg-red-100 p-4 font-inter">
+                <div className="text-red-700 text-center p-6 bg-white rounded-xl shadow-lg border border-red-300">
+                    <h1 className="text-xl font-bold flex items-center justify-center"><AlertTriangle className='w-5 h-5 mr-2'/> Error Crítico</h1>
                     <p className="mt-2">{error}</p>
-                    <p className="mt-4 text-sm font-mono break-all">ID Negocio Solicitado: **{businessId}**</p>
-                    <p className="text-xs mt-2">Revisa tu conexión a Internet o la configuración de Firebase.</p>
+                    <p className="mt-4 text-sm font-mono break-all text-gray-600">Negocio Solicitado: **{businessId}**</p>
+                    <p className="text-xs mt-2 text-gray-500">Revisa tu conexión a Internet o la configuración de Firebase.</p>
                 </div>
             </div>
         );
     }
 
-    // 6. Selección de Vista (Routing)
+    // 5. Selección de Vista (Routing)
 
     if (isOwnerView) {
-        return <AdminView businessId={businessId} businessConfig={businessConfig} updateStars={updateStars} />;
+        // En AdminView, la actualización de puntos se maneja internamente usando handleUpdateStar
+        return <AdminView businessId={businessId} businessConfig={businessConfig} />;
     }
 
     // Vista de Cliente
@@ -597,7 +633,6 @@ export default function App() {
             userData={userData} 
             businessId={businessId} 
             businessConfig={businessConfig}
-            updateStars={updateStars} 
         />
     );
 }
