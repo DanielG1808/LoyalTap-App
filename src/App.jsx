@@ -19,7 +19,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyCz1pYtGW9nlxhSM446wDjz-RN2gvc5kMM",
   authDomain: "loyaltap-bd851.firebaseapp.com",
   projectId: "loyaltap-bd851",
-  storageBucket: "loyaltap-bd851.firebasestorage.app",
+  storageBucket: "loyaltap-bd851.appspot.com",
   messagingSenderId: "288775756726",
   appId: "1:288775756726:web:85db003fac431dff08bf17"
 };
