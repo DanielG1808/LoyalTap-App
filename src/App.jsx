@@ -1,233 +1,285 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { QrCode, LogIn, Star, Coffee, User, Lock, Send, AlertTriangle, Scan } from 'lucide-react';
+import { 
+    getFirestore, 
+    doc, 
+    onSnapshot, 
+    updateDoc, 
+    setDoc, 
+    collection, 
+    query,
+    getDoc 
+} from 'firebase/firestore';
+import { QrCode, LogIn, Star, Coffee, User, Lock, Send, AlertTriangle, Scan, Loader, X, Check, Key } from 'lucide-react';
 
-// --- CONFIGURACIÓN GLOBAL (NO TOCAR) ---
-// Las variables __app_id, __firebase_config y __initial_auth_token son proporcionadas por el entorno.
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+// ============================================================
 
-// Inicialización de Firebase
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
-// ----------------------------------------
+const firebaseConfig = {
+  apiKey: "AIzaSyCz1pYtGW9nlxhSM446wDjz-RN2gvc5kMM",
+  authDomain: "loyaltap-bd851.firebaseapp.com",
+  projectId: "loyaltap-bd851",
+  storageBucket: "loyaltap-bd851.firebasestorage.app",
+  messagingSenderId: "288775756726",
+  appId: "1:288775756726:web:85db003fac431dff08bf17"
+};
+// ============================================================
 
-// ===============================================
-// 1. SUBCOMPONENTES (Placeholders Seguros)
-// ===============================================
+// Inicialización segura de Firebase
+let app, db, auth;
+try {
+    // Usamos la configuración directa si existe, o un objeto vacío para evitar crash inicial
+    const config = firebaseConfig.apiKey.includes("PEGAR") ? {} : firebaseConfig;
+    app = initializeApp(config);
+    db = getFirestore(app);
+    auth = getAuth(app);
+} catch (error) {
+    console.error("Error inicializando Firebase. Revisa tu configuración en src/App.jsx", error);
+}
 
-const AdminView = ({ businessId, businessConfig }) => (
-    <div className="max-w-xl mx-auto p-8 bg-blue-100 shadow-2xl rounded-xl border border-blue-200 mt-8">
-        <h2 className="text-3xl font-extrabold text-blue-700 flex items-center justify-center mb-4">
-            <Lock className='w-6 h-6 mr-2'/> Vista de Administrador
-        </h2>
-        <p className="text-center text-gray-600">ID del Negocio: <span className="font-mono text-sm text-blue-500">{businessId}</span></p>
-        <p className="text-center text-sm text-gray-500 mt-2">Bienvenido Dueño. Esta es la vista administrativa.</p>
-    </div>
-);
+// ID del negocio por defecto
+const DEFAULT_BUSINESS_ID = 'coffee-star';
 
-const CustomerView = ({ userId, userData, businessConfig }) => {
-    const stars = userData?.stars || 0;
-    const goal = businessConfig?.starsRequired || 10;
-    const progress = Math.min(100, (stars / goal) * 100);
+// --- CONFIGURACIÓN DE NEGOCIOS (Personalizable) ---
+const BUSINESS_CONFIG = {
+    'coffee-star': {
+        name: 'Coffee Star',
+        theme: 'text-yellow-600 bg-yellow-50',
+        primaryColor: 'bg-yellow-600 hover:bg-yellow-700',
+        icon: <Coffee size={28} />,
+        levels: [
+            { stars: 20, name: 'Oro', color: 'text-yellow-500', reward: '¡Café GRANDE gratis cada semana!' },
+            { stars: 10, name: 'Plata', color: 'text-gray-400', reward: '20% de descuento en todos los pasteles.' },
+            { stars: 5, name: 'Bronce', color: 'text-amber-700', reward: 'Bebida pequeña de cortesía en tu próximo cumpleaños.' },
+        ]
+    },
+    'barber-vip': {
+        name: 'Barber VIP Style',
+        theme: 'text-blue-700 bg-blue-50',
+        primaryColor: 'bg-blue-700 hover:bg-blue-800',
+        icon: <Send size={28} className='transform -scale-x-100' />,
+        levels: [
+            { stars: 8, name: 'Diamante', color: 'text-cyan-400', reward: 'Corte completo gratis.' },
+            { stars: 4, name: 'Oro', color: 'text-yellow-500', reward: '50% descuento en barba.' },
+        ]
+    }
+};
+
+// --- UTILIDADES ---
+const getLevelInfo = (stars, configLevels) => {
+    const sortedLevels = [...configLevels].sort((a, b) => a.stars - b.stars);
+    let currentLevel = { name: 'Novato', color: 'text-gray-500', reward: 'Sube de nivel para desbloquear recompensas.', stars: 0 };
+    let nextLevel = null;
+    
+    for (const level of sortedLevels) {
+        if (stars >= level.stars) {
+            currentLevel = { ...level, color: level.color };
+        } else if (!nextLevel) {
+            nextLevel = level;
+        }
+    }
+    return { ...currentLevel, nextStars: nextLevel ? nextLevel.stars - stars : 0, nextLevel };
+};
+
+// --- COMPONENTES ---
+
+const AdminView = ({ businessId, businessConfig, updateStars }) => {
+    const [tapId, setTapId] = useState('');
+    const [starsToAdd, setStarsToAdd] = useState(1);
+    const [message, setMessage] = useState('');
+    const [isUpdating, setIsUpdating] = useState(false);
+
+    const handleApplyStars = async () => {
+        if (!tapId) return setMessage('Ingresa un ID de Cliente.');
+        setIsUpdating(true);
+        setMessage('');
+        try {
+            await updateStars(tapId, starsToAdd);
+            setMessage(`¡Éxito! ${starsToAdd} puntos aplicados.`);
+            setTapId('');
+        } catch (e) {
+            setMessage(`Error: ${e.message}`);
+        } finally {
+            setIsUpdating(false);
+        }
+    };
 
     return (
-        <div className="max-w-xl mx-auto p-8 bg-white shadow-2xl rounded-xl border border-green-200 text-center mt-8">
-            <h2 className="text-3xl font-extrabold text-green-700 flex items-center justify-center mb-6">
-                <Coffee className='w-8 h-8 mr-2'/> LoyalTap Card
-            </h2>
-            <p className="text-gray-500 mb-4 text-xs">Tu ID: <span className="font-mono break-all text-gray-600">{userId}</span></p>
-            
-            <div className="my-6">
-                <QrCode size={180} className="mx-auto text-green-500 border-4 border-green-500 p-2 rounded-xl" />
-                <p className="mt-4 text-xl font-semibold text-gray-700">¡Escanea para puntos!</p>
-            </div>
-
-            <div className="mt-8">
-                <div className="flex justify-between items-center mb-2">
-                    <span className="text-2xl font-bold text-gray-800 flex items-center">Puntos: {stars} <Star className="ml-2 w-6 h-6 text-yellow-500"/></span>
-                    <span className="text-lg text-gray-600">Meta: {goal}</span>
+        <div className="p-4 max-w-md mx-auto">
+            <div className="bg-white shadow-xl rounded-2xl p-6">
+                <h2 className="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                    <Lock className="w-6 h-6 mr-2 text-indigo-600"/> Panel Admin: {businessConfig.name}
+                </h2>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">ID del Cliente</label>
+                        <input type="text" value={tapId} onChange={(e) => setTapId(e.target.value)} className="w-full p-3 border rounded-lg mt-1" placeholder="Pega el ID aquí" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Puntos a dar</label>
+                        <input type="number" value={starsToAdd} onChange={(e) => setStarsToAdd(Number(e.target.value))} className="w-full p-3 border rounded-lg mt-1" />
+                    </div>
+                    <button onClick={handleApplyStars} disabled={isUpdating} className="w-full py-3 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition">
+                        {isUpdating ? 'Procesando...' : 'Aplicar Puntos'}
+                    </button>
+                    {message && <p className="text-center font-medium text-sm mt-2">{message}</p>}
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-3">
-                    <div 
-                        className="bg-green-500 h-3 rounded-full transition-all duration-500" 
-                        style={{ width: `${progress}%` }}
-                    ></div>
-                </div>
-                <p className="text-sm mt-2 text-green-600 font-medium">Faltan {goal - stars} puntos para tu recompensa.</p>
             </div>
         </div>
     );
 };
 
+const CustomerView = ({ userId, userData, businessId, businessConfig }) => {
+    const stars = userData?.stars || 0;
+    const levelInfo = getLevelInfo(stars, businessConfig.levels);
+    
+    // QR Code simple
+    const qrData = `${businessId}/${userId}`;
+    const qrImageURL = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
 
-// ===============================================
-// 2. COMPONENTE PRINCIPAL APP
-// ===============================================
+    return (
+        <div className="min-h-screen bg-gray-50 p-4 flex flex-col items-center pb-20">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-lg text-white mb-6 ${businessConfig.primaryColor}`}>
+                <div className="flex items-center gap-3 mb-2">
+                    {businessConfig.icon}
+                    <h1 className="text-2xl font-bold">{businessConfig.name}</h1>
+                </div>
+                <p className="opacity-90">Nivel Actual: <span className="font-bold">{levelInfo.name}</span></p>
+            </div>
 
+            <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-6 text-center mb-6">
+                <p className="text-gray-500 text-sm uppercase tracking-wide">Tus Puntos</p>
+                <div className="text-6xl font-black text-gray-800 my-2 flex justify-center items-center">
+                    {stars} <Star className="w-8 h-8 text-yellow-400 fill-current ml-2" />
+                </div>
+                {levelInfo.nextLevel ? (
+                    <p className="text-sm text-gray-600">Faltan {levelInfo.nextStars} para {levelInfo.nextLevel.name}</p>
+                ) : (
+                    <p className="text-green-600 font-bold">¡Nivel Máximo Alcanzado!</p>
+                )}
+            </div>
+
+            <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-6 flex flex-col items-center">
+                <h3 className="font-bold text-gray-800 mb-4 flex items-center"><QrCode className="w-5 h-5 mr-2"/> Tu Código</h3>
+                <div className="p-2 border-2 border-dashed border-gray-300 rounded-lg">
+                    <img src={qrImageURL} alt="QR" className="w-48 h-48" />
+                </div>
+                <p className="mt-4 text-xs text-gray-400 font-mono break-all">{userId}</p>
+            </div>
+        </div>
+    );
+};
+
+// ==========================================
+// APP PRINCIPAL
+// ==========================================
 export default function App() {
-    // 2.1. ESTADOS
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
     const [userId, setUserId] = useState(null);
     const [userData, setUserData] = useState(null);
-    const [businessConfig, setBusinessConfig] = useState(null);
-    const [isAuthReady, setIsAuthReady] = useState(false); // Bandera para esperar la autenticación
+    const [loading, setLoading] = useState(true);
+    const [isOwnerView, setIsOwnerView] = useState(false);
 
-    // Obtener el businessId de la URL (Asumido)
-    const businessId = useMemo(() => {
-        const params = new URLSearchParams(window.location.search);
-        // Usa un ID de negocio de ejemplo si no hay uno en la URL
-        const id = params.get('businessId') || 'default-coffee-shop'; 
-        console.log(`[App.jsx] Business ID detectado: ${id}`);
-        return id;
-    }, []);
-    
-    // 2.2. HOOK DE AUTENTICACIÓN
+    // Routing simple
+    const path = window.location.pathname;
+    const parts = path.split('/').filter(p => p);
+    const businessId = parts[0] || DEFAULT_BUSINESS_ID;
+    const isAdminRoute = parts[1] === 'admin';
+    const businessConfig = BUSINESS_CONFIG[businessId] || BUSINESS_CONFIG[DEFAULT_BUSINESS_ID];
+
     useEffect(() => {
-        console.log("[App.jsx] Iniciando proceso de autenticación...");
-        
-        // Función para manejar el inicio de sesión
-        const signIn = async () => {
-            try {
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (err) {
-                console.error("Firebase Auth Error:", err);
-                setError(`Fallo de autenticación: ${err.message}`);
-            }
-        };
-
-        // Listener para el estado de autenticación (se activa después del signIn)
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
-            if (user) {
-                setUserId(user.uid);
-                console.log(`[App.jsx] Auth: Usuario autenticado. UID: ${user.uid}`);
-            } else {
-                 setUserId(null); 
-                 console.log("[App.jsx] Auth: Sesión anónima o fallida.");
-            }
-            setIsAuthReady(true); // ¡La autenticación ha finalizado su chequeo!
-        });
-        
-        signIn(); // Iniciar la sesión
-        return () => unsubscribe(); // Limpieza del listener
-    }, []);
-
-    // 2.3. HOOK DE CARGA DE DATOS (Se ejecuta SOLO si la autenticación está lista)
-    useEffect(() => {
-        // Bloquear si la autenticación no ha terminado o si faltan IDs
-        if (!isAuthReady || !userId || !businessId) {
-            console.log(`[App.jsx] Data Load: Esperando (Ready: ${isAuthReady}, UID: ${!!userId}, BID: ${!!businessId})`);
+        // Si las credenciales no están puestas, no intentamos nada
+        if (!auth || firebaseConfig.apiKey.includes("PEGAR")) {
+            setLoading(false);
             return;
         }
 
-        console.log(`[App.jsx] Data Load: Autenticación lista. UID: ${userId}. Iniciando listeners de Firestore.`);
-        let configUnsubscribed = false;
-        let userUnsubscribed = false;
-
-        // Listener 1: Configuración del Negocio (Ruta pública)
-        const businessDocRef = doc(db, `artifacts/${appId}/public/data/businesses`, businessId);
-        const unsubscribeConfig = onSnapshot(businessDocRef, (docSnap) => {
-            if (docSnap.exists()) {
-                setBusinessConfig(docSnap.data());
-                console.log("[App.jsx] Config: OK.");
-            } else {
-                // Esto es un error crítico si el negocio debe existir
-                setError(`Configuración no encontrada en Firestore para el negocio: ${businessId}.`);
-                console.error("[App.jsx] Config: ERROR - Documento no existe.");
+        // 1. Autenticar
+        const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+            let currentUid = user?.uid;
+            if (!user) {
+                try {
+                    const cred = await signInAnonymously(auth);
+                    currentUid = cred.user.uid;
+                } catch (e) {
+                    console.error("Error auth:", e);
+                }
             }
-        }, (err) => {
-            console.error("Error al cargar config de negocio:", err);
-            setError(`Error Firestore config: ${err.message}`);
+            setUserId(currentUid);
+            if (isAdminRoute) setIsOwnerView(true); // Simple check para demo
         });
 
-        // Listener 2: Datos del Usuario (Ruta privada)
-        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/data`, businessId);
-        const unsubscribeUser = onSnapshot(userDocRef, (docSnap) => {
-            if (!docSnap.exists()) {
-                const initialData = { stars: 0, created: new Date().toISOString() };
-                setUserData(initialData);
-                // Crea el documento inicial para evitar errores de referencia futuros
-                setDoc(userDocRef, initialData, { merge: true }).catch(console.error);
-                console.log("[App.jsx] User Data: Inicializado con 0 estrellas.");
-            } else {
+        return () => unsubscribeAuth();
+    }, []);
+
+    // 2. Cargar datos (solo si no es admin y tenemos usuario)
+    useEffect(() => {
+        if (!userId || isOwnerView || !db) {
+            if (userId) setLoading(false);
+            return;
+        }
+
+        // Ruta segura en Firestore
+        const userRef = doc(db, 'businesses', businessId, 'customers', userId);
+        
+        const unsubscribe = onSnapshot(userRef, (docSnap) => {
+            if (docSnap.exists()) {
                 setUserData(docSnap.data());
-                console.log("[App.jsx] User Data: OK.");
+            } else {
+                // Iniciar usuario
+                setUserData({ stars: 0 });
+                // Importante: Crear el documento inicial
+                setDoc(userRef, { stars: 0, joined: new Date().toISOString() }, { merge: true });
             }
-            setLoading(false); // ¡Los datos se cargaron o inicializaron! Parar loading.
-        }, (err) => {
-            console.error("Error al cargar datos de usuario:", err);
-            setError(`Error Firestore usuario: ${err.message}`);
+            setLoading(false);
+        }, (error) => {
+            console.error("Error Firestore:", error);
+            // Si falla por permisos (reglas), mostramos 0
+            setUserData({ stars: 0 }); 
             setLoading(false);
         });
 
-        // Limpieza de listeners
-        return () => {
-            unsubscribeConfig();
-            unsubscribeUser();
-            console.log("[App.jsx] Limpiando Listeners de Firestore.");
-        };
+        return () => unsubscribe();
+    }, [userId, businessId, isOwnerView]);
 
-    }, [isAuthReady, userId, businessId]); // Se ejecuta cuando la autenticación está lista
+    // Función para admin
+    const updateStars = useCallback(async (targetId, amount) => {
+        if (!db) return;
+        const ref = doc(db, 'businesses', businessId, 'customers', targetId);
+        const snap = await getDoc(ref);
+        const current = snap.exists() ? snap.data().stars : 0;
+        await setDoc(ref, { stars: Math.max(0, current + amount) }, { merge: true });
+    }, [businessId]);
 
-    // 2.4. Lógica de Vista (Propietario vs. Cliente)
-    const isOwner = userId === businessId;
-
-
-    // ===============================================
-    // 3. RENDERIZADO CONDICIONAL
-    // ===============================================
-
-    // Pantalla de Carga
-    if (loading || !businessConfig) {
+    // Mensaje si faltan las credenciales
+    if (firebaseConfig.apiKey && firebaseConfig.apiKey.includes("PEGAR")) {
         return (
-            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 font-inter">
-                <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-yellow-600"></div>
-                <p className="ml-4 text-gray-600 mt-4 font-semibold">Cargando LoyalTap...</p>
-                {/* Muestra el estado de las variables para depuración si no se detecta la carga */}
-                <p className="text-xs mt-4 text-gray-400">Auth Ready: {isAuthReady ? 'Sí' : 'No'} | Config Loaded: {!!businessConfig ? 'Sí' : 'No'}</p>
-            </div>
-        );
-    }
-    
-    // Pantalla de Error
-    if (error) {
-        return (
-            <div className="flex items-center justify-center min-h-screen bg-red-100 p-4 font-inter">
-                <div className="text-red-700 text-center p-6 bg-white rounded-xl shadow-lg border border-red-300">
-                    <h1 className="text-xl font-bold flex items-center justify-center"><AlertTriangle className='w-5 h-5 mr-2'/> Error Crítico</h1>
-                    <p className="mt-2">{error}</p>
-                    <p className="mt-4 text-sm font-mono break-all text-gray-600">App ID: **{appId}**</p>
-                    <p className="mt-1 text-sm font-mono break-all text-gray-600">Business ID: **{businessId}**</p>
-                    <p className="text-xs mt-4 text-gray-500">Asegúrate de que la configuración de Firebase exista en la ruta pública correcta.</p>
+            <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-red-50 text-red-800 text-center font-sans">
+                <div className="bg-white p-6 rounded-xl shadow-xl max-w-md border-l-4 border-red-600">
+                    <h1 className="text-2xl font-bold mb-4 flex items-center justify-center">
+                        <AlertTriangle className="w-8 h-8 mr-2 text-red-600"/>
+                        Configuración Incompleta
+                    </h1>
+                    <p className="mb-4">
+                        Tu aplicación ya está desplegada, pero <strong>necesita conectarse a Firebase</strong>.
+                    </p>
+                    <p className="text-sm bg-red-100 p-3 rounded text-left font-mono">
+                        Abre src/App.jsx y reemplaza las líneas que dicen "PEGAR_AQUI..." con los datos reales de tu consola de Firebase.
+                    </p>
                 </div>
             </div>
         );
     }
 
-    // 4. SELECCIÓN DE VISTA
-    return (
-        <div className="min-h-screen bg-gray-50 p-4 flex items-start justify-center">
-            {isOwner ? (
-                <AdminView 
-                    businessId={businessId} 
-                    businessConfig={businessConfig} 
-                />
-            ) : (
-                <CustomerView 
-                    userId={userId} 
-                    userData={userData} 
-                    businessConfig={businessConfig}
-                />
-            )}
+    if (loading) return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
+            <Loader className="w-10 h-10 text-indigo-600 animate-spin mb-4"/>
+            <p className="text-gray-500 font-medium">Iniciando LoyalTap...</p>
         </div>
     );
+
+    if (isOwnerView) {
+        return <AdminView businessId={businessId} businessConfig={businessConfig} updateStars={updateStars} />;
+    }
+
+    return <CustomerView userId={userId} userData={userData} businessId={businessId} businessConfig={businessConfig} />;
 }
