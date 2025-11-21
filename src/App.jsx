@@ -25,16 +25,14 @@ const firebaseConfig = {
 };
 // ============================================================
 
-// Inicialización segura de Firebase
+// Inicialización segura de Firebase (corregida)
 let app, db, auth;
 try {
-    // Usamos la configuración directa si existe, o un objeto vacío para evitar crash inicial
-    const config = firebaseConfig.apiKey.includes("PEGAR") ? {} : firebaseConfig;
-    app = initializeApp(config);
+    app = initializeApp(firebaseConfig);
     db = getFirestore(app);
     auth = getAuth(app);
 } catch (error) {
-    console.error("Error inicializando Firebase. Revisa tu configuración en src/App.jsx", error);
+    console.error("Error inicializando Firebase:", error);
 }
 
 // ID del negocio por defecto
